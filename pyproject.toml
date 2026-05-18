@@ -1,0 +1,71 @@
+[project]
+name = "truenas-api-conduit"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Edward Jazzhands", email = "ed.jazzhands@gmail.com" }
+]
+requires-python = ">=3.14"
+dependencies = [
+    "click>=8.4.0",
+    "keyring>=25.7.0",
+    "pydantic>=2.13.4",
+    "pydantic-settings>=2.14.1",
+    "rich-click>=1.9.7",
+    "secretstorage>=3.5.0",
+    "websockets>=11.0.1",
+]
+
+[project.scripts]
+truenas-api-conduit = "truenas_api_conduit.cli:cli"
+truenas-api = "truenas_api_conduit.cli:cli"
+
+[build-system]
+requires = ["uv_build>=0.9.24,<0.10.0"]
+build-backend = "uv_build"
+
+
+##########################
+# Dev Dependency Configs #
+##########################
+
+[dependency-groups]
+dev = [
+    "basedpyright>=1.39.3",
+    "black>=26.3.1",
+    "mypy>=1.20.2",
+    "ruff>=0.15.11",
+]
+
+[tool.black]
+line-length = 90
+
+[tool.mypy]
+pretty = true
+strict = true
+
+[tool.basedpyright]
+include = ["src"]
+typeCheckingMode = "strict"
+
+[tool.pytest.ini_options]
+
+# asyncio_mode = "auto"
+
+[tool.pyright]
+typeCheckingMode = "strict"
+
+# Paths
+include = ["src"]
+
+# Virtual environment
+venvPath = "."
+venv = ".venv"
+
+# Specific rule overrides
+# These all take ( "none", "warning", "error", "information" )
+# reportMissingImports = "error"
+# reportMissingTypeStubs = "warning"
+# reportUnusedVariable = "warning"
+# reportUnusedImport = "none"
