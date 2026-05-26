@@ -1,12 +1,16 @@
 # standard library
 import asyncio
-from typing import Any, Final
+from typing import Any, Final, TYPE_CHECKING
 import json
 import os
 import sys
 import time
+import ssl
 from pathlib import Path
 import logging
+
+if TYPE_CHECKING:
+    from truenas_api_conduit.user_config import Config
 
 # third party
 import websockets
@@ -15,10 +19,13 @@ import websockets.legacy.client as legacy_client
 import websockets.exceptions
 
 # project
-# from truenas_api_conduit.user_config import CFG
+from truenas_api_conduit.setup_app_dir import CONFIG_DIR
+import truenas_api_conduit.api_requests as api_requests
 
 log = logging.getLogger(__name__)
 
+UPTIME_OUTPUT = Path("/tmp") / "uptime.txt"
+RECONNECT_DELAY = 5
 
 # Server Metrics I want to collect:
 
@@ -32,9 +39,7 @@ log = logging.getLogger(__name__)
 
 
 async def websocket_send(
-    ws: websockets.client.WebSocketClientProtocol, 
-    json_dict: dict, 
-    req_id: int
+    ws: websockets.client.WebSocketClientProtocol, json_dict: dict, req_id: int
 ) -> dict[str, Any]:
 
     await ws.send(json.dumps(json_dict))
@@ -64,8 +69,9 @@ async def websocket_send(
     return msg
 
 
-async def session():
-    
+async def session(cfg: Config):
+
+    log.info("Starting daemon session")
 
     # Websockets are asynchronous, the server doesn't guarantee it will
     # respond to your messages in the same order you sent them.
@@ -73,89 +79,106 @@ async def session():
     # responses to requests.
     req_id = 1
 
-    async with legacy_client.connect(URI) as ws:
+    # Create an SSL context that skips certificate verification
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    if cfg.validate_certs:
+        if cfg.truenas_cert_path is not None:
+            cert_path_obj = Path(cfg.truenas_cert_path)
+            ssl_context.load_verify_locations(cafile=cert_path_obj)
+        # if validating but there's no cert path, it must be because the cert is
+        # from a trusted CA, which websockets will automatically validate.
+    else:
+        # required before you can disable cert verification:
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
 
-        auth_request_dict ={
+    async with legacy_client.connect(cfg.uri, ssl=ssl_context) as ws:
+
+        auth_request_dict = {
             "id": req_id,
             "jsonrpc": "2.0",
             "method": "auth.login_with_api_key",
-            "params": [TRUENAS_API_KEY]
+            "params": [cfg.api_key],
         }
 
-        # --- AUTHENTICATION ---
-        # We do this once at the start of the session rather than on every request, 
-        # this is the main advantage of a persistent websocket over a REST API
+        # AUTHENTICATION
         await ws.send(json.dumps(auth_request_dict))
         received = await ws.recv()
 
         auth_response = json.loads(received)
         if not auth_response.get("result"):
-            print("Authentication failed", file=sys.stderr)
+            log.error("Authentication failed")
             return
-        print("Authenticated.")
-        req_id += 1 
+        log.info("Authenticated.")
+        req_id += 1
 
-        # --- POLL LOOP ---
-        # This runs forever (until the connection drops or the script is killed).
-        # Each iteration sends one request, waits for its response, writes the
-        # result to disk for Conky to read, then sleeps before doing it again.
-
+        # POLL LOOP
         while True:
+            # This runs forever (until the connection drops or the script is killed).
+            # Each iteration sends one request, waits for its response, writes the
+            # result to output files, then sleeps
 
-            # NOTE: These request dicts must be inside of the while loop 
+            # NOTE: These request dicts must be inside of the while loop
             # for req_id to increment
 
             # contains the result.uptime stat
-            system_info = {
-                "id": req_id,
-                "jsonrpc": "2.0",
-                "method": "system.info",
-                "params": []
-            }
+            system_info = api_requests.system_info(req_id)
 
             # contains result.size, result.allocated, result.free
-            pool_query = {
-                "id": req_id+1,
-                "jsonrpc": "2.0",
-                "method": "pool.query",
-                "params": []
-            }
+            pool_query = api_requests.pool_query(req_id)
 
             msg = await websocket_send(ws, system_info, req_id)
 
             uptime = msg.get("result", {}).get("uptime")
             if uptime is not None:
-                # Write atomically to a temp file then replace, so Conky never
+                # Write atomically to a temp file then replace, so programs never
                 # reads a half-written file mid-update
                 tmp = UPTIME_OUTPUT.with_suffix(".tmp")
                 tmp.write_text(str(uptime) + "\n")
                 tmp.replace(UPTIME_OUTPUT)
 
-                print(f"Uptime: {uptime}")
+                log.debug(f"Uptime: {uptime}")
             else:
-                print(f"Unexpected response: {msg}", file=sys.stderr)
-
+                log.error(f"Unexpected response: {msg}")
 
             req_id += 1
-            await asyncio.sleep(POLL_INTERVAL)
+            log.info("Sleeping for %s seconds", cfg.polling_interval)
+            await asyncio.sleep(cfg.polling_interval)
 
 
-
-async def start():
+async def session_wrapper(cfg: Config):
     # Wraps the entire session so that if the connection drops for any
     # reason, we wait a few seconds and try again.
     while True:
         try:
-            await session()
-        except websockets.exceptions.InvalidURI as e:
+            await session(cfg)
+        except ssl.SSLError as e:
+            # SSL errors mean the HTTPS connection is not working, often due to
+            # a bad certificate.
+            log.error(
+                f"SSL error: {e}\n"
+                "You can fix this by:\n"
+                "  - Using a trusted certificate signed by a CA\n"
+                "  - Setting truenas_cert_path to the path of your self-signed certificate\n"
+                "  - Setting validate_certs to False\n"
+            )
+            sys.exit(1)
+        except (websockets.exceptions.InvalidURI, ssl.SSLError) as e:
             # A bad URI means something is wrong with TRUENAS_HOST in .env.
-            # No point retrying since it'll never work without a fix.
-            print(f"Invalid URI: {e}", file=sys.stderr)
+            # Regular error since the user should be able to fix it.
+            log.error(f"Connection error: {e}")
             sys.exit(1)
         except (websockets.exceptions.WebSocketException, OSError) as e:
-            print(f"Connection error: {e}, reconnecting in {RECONNECT_DELAY}s...", file=sys.stderr)
+            log.error(
+                f"Connection error: {e}, reconnecting in {RECONNECT_DELAY}s...",
+            )
             await asyncio.sleep(RECONNECT_DELAY)
         except Exception as e:
-            print(f"Unexpected error: {e}, reconnecting in {RECONNECT_DELAY}s...", file=sys.stderr)
+            log.error(
+                f"Unexpected error: {e}, reconnecting in {RECONNECT_DELAY}s...",
+            )
             await asyncio.sleep(RECONNECT_DELAY)
 
+
+def start(cfg: Config):
+    asyncio.run(session_wrapper(cfg))

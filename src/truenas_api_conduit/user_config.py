@@ -1,122 +1,106 @@
 # standard library
-import sys
-import shutil
-import os
-from pathlib import Path
-import tomllib
-from typing import Any, Final
+from typing import Any
 import logging
 
 # third party
-import keyring
-import pydantic
-from pydantic import BaseModel, field_validator, Field, computed_field
-from pydantic.fields import FieldInfo
+from pydantic import field_validator, Field, computed_field
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
     TomlConfigSettingsSource,
-    SecretsSettingsSource,
-    CliSettingsSource,
+    EnvSettingsSource,
+    InitSettingsSource,
 )
 
 # project
 from truenas_api_conduit import APP_NAME
+import truenas_api_conduit.log_setup as log_setup
+from truenas_api_conduit.setup_app_dir import CONFIG_PATH
+from truenas_api_conduit.keyring_source import KeyringSettingsSource
+
+__all__ = ["Config"]
 
 log = logging.getLogger(__name__)
 
-# NOTE: It does not make sense to use platformdirs here because the config file
-# must be edited manually by the user. On Windows and MacOS, the conventional
-# app data directories are hidden from users by default, so average users
-# wouldn't be able to find the config file (these locations are intended for
-# programs that manage their own data internally).
-# Since we need the user to edit the config file, for Windows and MacOS we
-# place the config folder directly in the home directory. This is considered
-# standard practice for cross-platform apps with a user-editable config file.
-# For Linux we follow the XDG Base Directory specification instead.
-if sys.platform == "linux":
-    config_dir = Path.home() / ".config" / APP_NAME
-    log.debug("Detected Linux")
-else:
-    config_dir = Path.home() / APP_NAME
-    if sys.platform == "win32":
-        log.debug("Detected Windows")
-    elif sys.platform == "darwin":
-        log.debug("Detected MacOS")
-    else:
-        log.debug("Unknown Operating System")
-
-CONFIG_PATH: Final = config_dir / "config.toml"
+if not CONFIG_PATH.exists():
+    log.error("Config file not found, this is a runtime bug.")
+    raise FileNotFoundError(f"Config file not found at {CONFIG_PATH}")
 
 
-def setup_user_config_folder() -> None:
-    try:
-        config_dir.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        log.error("Could not create the config directory. Aborting - See traceback.")
-        raise
-    
-    if not CONFIG_PATH.exists():
-        settings_file_path = Path(__file__).parent / "settings.conf"
-        try:
-            shutil.copy(settings_file_path, CONFIG_PATH)
-            # OR:
-            # settings_file.copy(CONFIG_PATH) # This is the newer way but its only 3.14+
-        except Exception as e:
-            log.error(f"Could not create the default config file: {e}")
+config_provenance: dict[str, Any] = {}
 
 
-# Secrets chain example on Linux
-# App
-#   -> keyring (cross-platform abstraction)
-#     -> secretstorage (Linux Secret Service client)
-#       -> jeepney (D-Bus transport)
-#         -> [GNOME Keyring daemon / KWallet / KeePassXC]
+# def tracking_source_factory(
+#     source_cls: type[PydanticBaseSettingsSource], label: str
+# ) -> type[PydanticBaseSettingsSource]:
+#     """Wraps any settings source class to record which fields it provides."""
 
-class KeyringSettingsSource(PydanticBaseSettingsSource):
-    
-    def __init__(self, settings_cls: type[BaseSettings]):
-        super().__init__(settings_cls)
+#     class TrackingSource(source_cls):
 
-        # Get the defaults from the main Config class:
-        self.service_field: str = Config.secrets_manager_service_field
-        self.username_field: str = Config.secrets_manager_username_field
+#         # This overrides the __call__ method, does a super().__call__(),
+#         # grabs the data it needs, adds it to the provenance dict, then
+#         # returns the call data.
 
-    def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
-        super().get_field_value(field, field_name)
-        # Required override from PydanticBaseSettingsSource (an ABC).
-        # Returns a tuple of (value, field_name, value_is_complex).
+#         def __call__(self) -> dict[str, Any]:
+#             # Recall, every source returns the dict of k/v pairs it provides
+#             data: dict[str, Any] = super().__call__()
+#             for key in data:
+#                 if key not in config_provenance:
+#                     config_provenance[key] = label
+#             return data
 
-        # NOTE: We don't actually need to use this method so this is a placeholder.
-        return None, field_name, False
+#     TrackingSource.__name__ = f"Tracking{source_cls.__name__}"
+#     return TrackingSource
+
+
+# TrackingEnvSource = tracking_source_factory(EnvSettingsSource, "env")
+# TrackingTomlSource = tracking_source_factory(TomlConfigSettingsSource, "toml")
+# TrackingInitSource = tracking_source_factory(InitSettingsSource, "init")
+# TrackingKeyringSource = tracking_source_factory(KeyringSettingsSource, "keyring")
+
+
+class TrackingSourceMixin:
+    source_label: str
 
     def __call__(self) -> dict[str, Any]:
+        # Recall, every source returns the dict of k/v pairs it provides
+        data: dict[str, Any] = super().__call__()  # type: ignore
+        for key in data:  #    ^^^^ super in a Mixin follows MRO
+            if key not in config_provenance:
+                config_provenance[key] = self.source_label
+                log.debug(f"{key} was loaded from {self.source_label}")
+        return data
 
-        # This will automatically read from the toml file set in the model_config
-        toml_source = TomlConfigSettingsSource(self.settings_cls)
-        toml_data = toml_source()
 
-        log.debug("Parsed toml data")
+# Every new tracking source class maintains the constructor signature
+# of the original source class because we didn't override __init__
 
-        service_field = toml_data.get("secrets_manager_service_field")
-        username_field = toml_data.get("secrets_manager_username_field")
-        log.debug(f"service_field: {service_field} | username_field: {username_field}")
 
-        if service_field is not None:
-            self.service_field = service_field
-        if username_field is not None:
-            self.username_field = username_field
+class TrackingEnvSource(TrackingSourceMixin, EnvSettingsSource):
+    source_label = "env"
 
-        password = keyring.get_password(self.service_field, self.username_field)
 
-        d: dict[str, Any] = {}
-        if password is not None:
-            log.debug("Found API key in keyring")
-            d["api_key"] = password
-        else:
-            log.debug("No API key found in keyring")
-        return d
+class TrackingTomlSource(TrackingSourceMixin, TomlConfigSettingsSource):
+    source_label = "toml"
+
+
+class TrackingInitSource(TrackingSourceMixin, InitSettingsSource):
+    source_label = "init"
+
+
+class TrackingKeyringSource(TrackingSourceMixin, KeyringSettingsSource):
+    source_label = "keyring"
+
+
+class SecretStr(str):
+    "Will only print the first 10 chars of the secret during logging output"
+
+    def __repr__(self):
+        return f"'{self[:10]}...'"
+
+    def __str__(self):
+        return f"{self[:10]}..."
 
 
 class Config(BaseSettings):
@@ -125,48 +109,62 @@ class Config(BaseSettings):
         env_file_encoding="utf-8",
         env_prefix="TRUENAS_",
         frozen=False,
-        validate_by_name=True,    # <- This is the new and recommended way
+        validate_by_name=True,  # <- This is the new and recommended way
         validate_by_alias=True,
-        # populate_by_name=True, # ! Not recommended in v2.11 and above
+        # populate_by_name=True, # ! Deprecated - Not recommended in v2.11+
     )
 
-    # NOTE: pydantic-settings sources docs:
+    # pydantic-settings sources docs:
     # https://pydantic.dev/docs/validation/latest/concepts/pydantic_settings/#other-settings-source
 
     @classmethod
-    def settings_customise_sources(
+    def settings_customise_sources(  # type: ignore
         cls,
         settings_cls: type[BaseSettings],
-        init_settings: PydanticBaseSettingsSource,
+        init_settings: InitSettingsSource,  # <- type checkers don't like this but its fine
         env_settings: PydanticBaseSettingsSource,
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
 
+        log.info("Populating settings from sources...")
+
         # Priority follows the order of the tuple:
+        # 1. CLI flags passed into constructor
+        # 2. Keyring/Secrets Manager
+        # 3. Environment variables
+        # 4. Config file
+        # 5. Config class defaults
         return (
-            init_settings, #                         1. CLI flags
-            KeyringSettingsSource(settings_cls), #   2. Keyring/Secrets Manager
-            env_settings, #                          3. Environment variables   
-            TomlConfigSettingsSource(settings_cls) # 4. Config file
-            # Our Config class itself becomes lowest 5. Config class defaults
+            TrackingInitSource(settings_cls, init_settings.init_kwargs),
+            TrackingKeyringSource(settings_cls, service="truenas"),
+            TrackingEnvSource(settings_cls),
+            TrackingTomlSource(settings_cls),
         )
 
     # NOTE: Because we have env_settings in the sources, Pydantic will look for
     # env variables with the same name as each field, with the env_prefix="TRUENAS_".
     # `api_key` would be TRUENAS_API_KEY, `log_level` would be TRUENAS_LOG_LEVE, etc.
-    # The one exception is `truenas_host`, which will use the alias "TRUENAS_HOST".
+    # The two exceptions are at the top: `truenas_host`, which will use the alias
+    # "TRUENAS_HOST", because otherwise it would be TRUENAS_TRUENAS_HOST. The same
+    # goes for `truenas_cert_path`.
+
+    # NOTE: using default=... is a way to tell pydantic that the field is required,
+    # while also preventing it from being a required constructor argument.
+    # It signals to Pyright that Pydantic will take care of the validation.
 
     # User settings
-    truenas_host: str = Field(validation_alias="TRUENAS_HOST")
-    secrets_manager_service_field: str = "truenas"
-    secrets_manager_username_field: str = "api-key"
-    api_key: str
+    truenas_host: str = Field(default=..., validation_alias="TRUENAS_HOST")
+    truenas_cert_path: str | None = Field(
+        default=None, validation_alias="TRUENAS_CERT_PATH"
+    )
+    validate_certs: bool = True
+    api_key: SecretStr | str = Field(default=..., json_schema_extra={"keyring": True})
     api_route: str = "/api/current"
+    polling_interval: int = 10
     log_level: str = "warning"
-    rich_traceback: bool = False
 
-    # NOTE: computed_field decorator docs:
+    # computed_field decorator docs:
     # https://pydantic.dev/docs/validation/latest/concepts/fields/#the-computed_field-decorator
 
     # Internal settings
@@ -175,66 +173,46 @@ class Config(BaseSettings):
     def uri(self) -> str:
         return f"wss://{self.truenas_host}{self.api_route}"
 
-    # NOTE: field_validator decorator docs:
+    @property
+    def provenance(self) -> dict[str, str]:
+        return config_provenance
+
+    # field_validator decorator docs:
     # https://pydantic.dev/docs/validation/latest/concepts/validators/#json-schema-and-field-validators
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def coerce_secret(cls, v):
+        return SecretStr(v)
 
     @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v: str) -> str:
-        valid = {"debug", "info", "warning", "error", "critical"}
+        valid = {"trace", "debug", "info", "warning", "error", "critical"}
         if v.lower() not in valid:
             raise ValueError(f"log_level must be one of {valid}, got {v!r}")
         return v.lower()
 
+    @field_validator("truenas_host")
+    @classmethod
+    def validate_truenas_host(cls, v: str) -> str:
+        if v == "192.168.1.xxx:443":
+            raise ValueError(
+                "You need to set a value for your TrueNAS server's address. The default "
+                "in the config file is only for demonstration. You can set it in the config "
+                "file, as an environment variable (TRUENAS_HOST), or using the --truenas-host "
+                "option on the command line."
+            )
+        return v
+
+    # FOR REFERENCE: Example expanding a path:
     # @field_validator("local_storage_path", mode="before")
     # @classmethod
     # def expand_storage_path(cls, v: Any) -> Path:
     #     return Path(v).expanduser()
 
+    def model_post_init(self, _context: Any) -> None:
 
-# <>-<> ABOUT PYDANTIC ERRORS <>-<>
-
-# Pydantic contains an `errors()` method that returns a list of errors
-# that were encountered during validation. This is a list of
-# `ErrorDetails` objects, which are a dict with the following keys:
-
-# - `type`: The type of error that occurred, machine-readable
-# - `loc`: tuple of (str, int) identifying where in the schema the error occurred.
-#   the str is the name of the field (the key), and the int is {???}
-# - `msg`: A human readable error message.
-# - `input`: The input data at this `loc` that caused the error.
-# - `ctx`: Values which are required to render the error message, and could hence be useful in
-#   rendering custom error messages. Also useful for passing custom error data forward.
-# - `url`: The documentation URL giving information about the error. No URL is available if
-#   a [`PydanticCustomError`][pydantic_core.PydanticCustomError] is used.
-
-# ABOUT 'loc'
-
-# The loc tuple represents the path to the field that failed validation, tracing through
-# your nested data structure from the root down to the exact problem location. Each
-# element in the tuple is one step deeper into the nesting. For simple fields, it's just
-# the field name like ('username',). For nested models, it shows the path through field
-# names like ('username', 'address', 'zip_code'). When validating sequences like lists,
-# an integer index appears in the path to indicate which element failed, like
-# ('items', 2, 'price') for an error in the third item's price field.
-
-# <>-<> Some common scenarios <>-<>
-
-#* "Required field not found"
-# You get type: "missing", msg is something like "Field required".
-
-#* "Field not in the model"
-# By default pydantic-settings just silently ignores extra fields. If you want 
-# it to error, you need model_config = SettingsConfigDict(extra="forbid"), 
-# then you'll get type: "extra_forbidden".
-
-#* "Field is empty" (e.g. host = "")
-# This changes depending on the type. A str field will accept "" with no error. If  
-# you want to reject empty strings you need to add a validator like min_length=1 
-# or a @field_validator. A None value on a non-optional field gives you 
-# type: "missing" or type: "none_required" depending on context.
-
-#* "Field is invalid" (e.g. port = "banana" for an int field)
-# You get type: "int_parsing" or similar, and msg like 
-# "Input should be a valid integer".
-
+        log_mapping = logging.getLevelNamesMapping()
+        log_setup.set_log_level(log_mapping[self.log_level.upper()])
+        log.debug("Config post init: log_level set to %s", self.log_level)
