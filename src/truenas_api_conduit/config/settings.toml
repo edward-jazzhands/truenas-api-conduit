@@ -11,8 +11,8 @@ truenas_host = "192.168.1.xxx:443"
 
 # Set this to True to skip certificate validation. This is not recommended, as its
 # better to use a self-signed certificate. However, this does allow you to use
-# this program without having a certificate on your machine. (Default: True)
-# validate_certs = False
+# this program without having a certificate on your machine. (Default: true)
+# validate_certs = true
 
 # WARNING: Storing API keys in plain text is a security risk.
 # Recommended to use one of the other methods such as your OS's secrets manager,

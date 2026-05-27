@@ -3,23 +3,25 @@ import signal
 import sys
 import logging
 from typing import Any, Callable, TYPE_CHECKING
+from dataclasses import dataclass
 
 if TYPE_CHECKING:
-    from truenas_api_conduit.user_config import Config
+    from truenas_api_conduit.config.user_config import Config
 
 # third-party
 import rich_click as click
 from click_didyoumean import DYMMixin
-from rich.traceback import install
+from rich.traceback import install as tb_install
 
 # project
 from truenas_api_conduit import __version__, APP_NAME
-import truenas_api_conduit.log_setup as log_setup
+import truenas_api_conduit.core as core
 from truenas_api_conduit.console import console_stderr
-from truenas_api_conduit.cli_options_class import CLIOptions
 
 # rich tracebacks
-install(console=console_stderr, show_locals=False)
+tb_install(console=console_stderr, show_locals=False)
+
+log = logging.getLogger(__name__)
 
 # Rich-click Config
 click.rich_click.MAX_WIDTH = 120
@@ -28,8 +30,6 @@ click.rich_click.THEME = "cargo-modern"
 # colorschemes: #~ [default, star, quartz, quartz2, cargo, forest, nord, dracula, solarized]
 # theme types: #~ [box, slim, modern, robo, nu]
 # nord, dracula, and solarized are "risky" according to the docs.
-
-log = logging.getLogger(__name__)
 
 
 def handle_exit(*_):
@@ -48,6 +48,20 @@ if sys.platform != "win32":
     signal.signal(signal.SIGQUIT, handle_exit)
 
 
+@dataclass
+class CLIOptions:
+    """dataclass\n
+    ```
+    api_key: str | None = None
+    truenas_host: str | None = None
+    verbose: int = 0
+    """
+
+    api_key: str | None = None
+    truenas_host: str | None = None
+    verbose: int = 0
+
+
 def common_setup(cli_options: CLIOptions) -> Config:
 
     # NOTE: Remember the root logger starts at WARNING, so the very first thing
@@ -64,7 +78,7 @@ def common_setup(cli_options: CLIOptions) -> Config:
             log_level = log_mapping["TRACE"]  # 5
 
         level_name = logging.getLevelName(log_level)
-        log_setup.set_log_level(log_level)
+        core.log_setup.set_log_level(log_level)
 
     log_level: int = logging.getLogger().level
     log.info("Logging level set to %s", log_level)
@@ -81,16 +95,16 @@ def common_setup(cli_options: CLIOptions) -> Config:
 
     # NOTE: Remember that the config file/dir must be ensured before trying to
     # import the user_config module:
-    from truenas_api_conduit.setup_app_dir import ensure_config
+    core.ensure_config()  # Raises if failure
 
-    ensure_config()
-
-    from truenas_api_conduit.user_config import Config
-    import pydantic  #   also lazy to reduce startup time
+    # Pydantic will not be loaded until this following import. Its one
+    # of the heavier dependencies so this improves startup time.
+    from truenas_api_conduit.config import Config
+    from pydantic import ValidationError  # .config already imports pydantic
 
     try:
         cfg = Config(**args_dict)
-    except pydantic.ValidationError as e:
+    except ValidationError as e:
         log.error(f"You have an error in your configuration: {e}")
         sys.exit(1)
     except Exception as e:
@@ -166,6 +180,9 @@ It is recommended to set this in your config file."""
 verbose_help = """Sets the verbosity/logging level. -v for info, -vv for debug, \
 -vvv for trace."""
 
+foreground_help = """Starts the service as a standalone program in the foreground (not
+run by your service manager). This is useful for debugging and development."""
+
 
 def common_options(f: Callable) -> Callable:
     f = click.option(
@@ -219,20 +236,72 @@ def cli(ctx: click.Context) -> None:
 
 @cli.command()
 @common_options
-@main_commands_options
 @click.pass_context
-def daemon(ctx: click.Context) -> None:
-    """Launches the daemon mode. This will hold the websocket connection
-    open so that subsequent requests can re-use the same connection."""
+def install(ctx: click.Context) -> None:
 
     assert isinstance(ctx.obj, CLIOptions)
     cfg = common_setup(ctx.obj)
 
     log.debug("Config provenance: %s", cfg.provenance)
 
-    from truenas_api_conduit.daemon import start
+    from truenas_api_conduit.service import get_service_manager
+    from truenas_api_conduit.core import PLATFORM
+    service = get_service_manager(PLATFORM)
 
-    start(cfg)
+    service.install()
+
+@cli.command()
+@common_options
+@click.pass_context
+def uninstall(ctx: click.Context) -> None:
+
+    pass
+
+
+@cli.command()
+@common_options
+@main_commands_options
+@click.option("--foreground", "-fg", is_flag=True, help=foreground_help)
+@click.pass_context
+def start(ctx: click.Context) -> None:
+    """Starts the conduit service (Must be installed). This will hold the websocket 
+    connection open so that subsequent requests can re-use the same connection. You 
+    can also run the service directly as a standalone program without installing by 
+    using the --foreground option. This is useful for testing/debugging."""
+
+    assert isinstance(ctx.obj, CLIOptions)
+    cfg = common_setup(ctx.obj)
+
+    log.debug("Config provenance: %s", cfg.provenance)
+
+    from truenas_api_conduit.service import get_service_manager
+    from truenas_api_conduit.core import PLATFORM
+    service = get_service_manager(PLATFORM)
+
+    service.start(cfg)
+
+
+
+@cli.command()
+@common_options
+@click.pass_context
+def stop(ctx: click.Context) -> None:
+    pass
+
+
+@cli.command()
+@common_options
+@click.pass_context
+def restart(ctx: click.Context) -> None:
+    pass
+
+
+@cli.command()
+@common_options
+@click.pass_context
+def status(ctx: click.Context) -> None:
+    pass
+
 
 
 @cli.command()
@@ -240,7 +309,7 @@ def daemon(ctx: click.Context) -> None:
 @main_commands_options
 @click.pass_context
 def request(ctx: click.Context) -> None:
-    """Make a request, using the daemon if it's running. Otherwise, the program
+    """Make a request, using the service if it's running. Otherwise, the program
     will open a websocket connection, make the request, and close the connection."""
 
     # TODO: Implement request
@@ -256,9 +325,10 @@ def set_key(ctx: click.Context) -> None:
     """Sets the API key using whatever compatible keyring/secrets manager is
     available on your system."""
 
-    # TODO: Implement set API key
     log.debug("Setting API key")
-    pass
+    import keyring
+
+    # TODO: Implement set API key
 
 
 @cli.command()
@@ -267,7 +337,5 @@ def set_key(ctx: click.Context) -> None:
 def config_path(ctx: click.Context) -> None:
     """Prints the path to the config file."""
 
-    from truenas_api_conduit.setup_app_dir import CONFIG_PATH
-
-    click.echo(CONFIG_PATH)  # stays clean/pure for piping
-    console_stderr.print(f"Created already?: {CONFIG_PATH.exists()}")
+    click.echo(core.CONFIG_PATH)  # stays clean/pure for piping
+    console_stderr.print(f"Created already?: {core.CONFIG_PATH.exists()}")

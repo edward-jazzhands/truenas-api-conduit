@@ -14,10 +14,9 @@ from pydantic_settings import (
 )
 
 # project
-from truenas_api_conduit import APP_NAME
-import truenas_api_conduit.log_setup as log_setup
-from truenas_api_conduit.setup_app_dir import CONFIG_PATH
-from truenas_api_conduit.keyring_source import KeyringSettingsSource
+from truenas_api_conduit import APP_NAME, log_setup
+from truenas_api_conduit.core import CONFIG_PATH
+from truenas_api_conduit.config.keyring_source import KeyringSettingsSource
 
 __all__ = ["Config"]
 
@@ -29,35 +28,6 @@ if not CONFIG_PATH.exists():
 
 
 config_provenance: dict[str, Any] = {}
-
-
-# def tracking_source_factory(
-#     source_cls: type[PydanticBaseSettingsSource], label: str
-# ) -> type[PydanticBaseSettingsSource]:
-#     """Wraps any settings source class to record which fields it provides."""
-
-#     class TrackingSource(source_cls):
-
-#         # This overrides the __call__ method, does a super().__call__(),
-#         # grabs the data it needs, adds it to the provenance dict, then
-#         # returns the call data.
-
-#         def __call__(self) -> dict[str, Any]:
-#             # Recall, every source returns the dict of k/v pairs it provides
-#             data: dict[str, Any] = super().__call__()
-#             for key in data:
-#                 if key not in config_provenance:
-#                     config_provenance[key] = label
-#             return data
-
-#     TrackingSource.__name__ = f"Tracking{source_cls.__name__}"
-#     return TrackingSource
-
-
-# TrackingEnvSource = tracking_source_factory(EnvSettingsSource, "env")
-# TrackingTomlSource = tracking_source_factory(TomlConfigSettingsSource, "toml")
-# TrackingInitSource = tracking_source_factory(InitSettingsSource, "init")
-# TrackingKeyringSource = tracking_source_factory(KeyringSettingsSource, "keyring")
 
 
 class TrackingSourceMixin:
@@ -137,7 +107,7 @@ class Config(BaseSettings):
         # 5. Config class defaults
         return (
             TrackingInitSource(settings_cls, init_settings.init_kwargs),
-            TrackingKeyringSource(settings_cls, service="truenas"),
+            TrackingKeyringSource(settings_cls, service="truenas", raise_on_missing_key=False),
             TrackingEnvSource(settings_cls),
             TrackingTomlSource(settings_cls),
         )

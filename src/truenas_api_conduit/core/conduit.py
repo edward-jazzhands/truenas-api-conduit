@@ -127,7 +127,13 @@ async def session(cfg: Config):
             # contains result.size, result.allocated, result.free
             pool_query = api_requests.pool_query(req_id)
 
-            msg = await websocket_send(ws, system_info, req_id)
+            try:
+                msg = await websocket_send(ws, system_info, req_id)
+            except Exception as e:
+                log.error(f"Unexpected error: {e}")
+                continue
+            else:
+                log.info(f"Request #{req_id} was successful")
 
             uptime = msg.get("result", {}).get("uptime")
             if uptime is not None:
@@ -142,7 +148,7 @@ async def session(cfg: Config):
                 log.error(f"Unexpected response: {msg}")
 
             req_id += 1
-            log.info("Sleeping for %s seconds", cfg.polling_interval)
+            log.debug("Sleeping for %s seconds", cfg.polling_interval)
             await asyncio.sleep(cfg.polling_interval)
 
 
