@@ -12,15 +12,17 @@ import sys
 import textwrap
 from pathlib import Path
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from truenas_api_conduit.config.user_config import Config
 
 # local
 from truenas_api_conduit import APP_NAME
-from truenas_api_conduit.core import CONFIG_DIR
+from truenas_api_conduit.core import CONFIG_DIR, InstallType
 from truenas_api_conduit.service.base import BaseService
 
 import logging
+
 logger = logging.getLogger(__name__)
 
 
@@ -51,6 +53,7 @@ def _build_unit_file(executable: Path) -> str:
 
 
 # <->-<-> Helpers <->-<->
+
 
 def _resolve_daemon_executable() -> Path:
     """
@@ -95,17 +98,20 @@ def _require_systemctl(*args: str, error_context: str) -> None:
         raise RuntimeError(f"{error_context}: {detail}")
 
 
-# Service implementation 
+# Service implementation
+
 
 class LinuxService(BaseService):
 
-    def install(self) -> None:
+    def install(self, install_type: InstallType) -> None:
         """
         Write the systemd user unit file and enable the service.
 
         Also calls `loginctl enable-linger` so the user unit survives logout
         and starts on boot without requiring an interactive session.
         """
+        #! install_type not implemented yet
+
         executable = _resolve_daemon_executable()
         logger.debug("Daemon executable resolved to: %s", executable)
 
@@ -117,7 +123,6 @@ class LinuxService(BaseService):
 
         _require_systemctl("daemon-reload", error_context="daemon-reload failed")
         _require_systemctl("enable", UNIT_NAME, error_context="Failed to enable unit")
-
 
         # HACK: Path.home().name for the linger username is portable in most cases
         # but can be wrong on systems where the home directory name doesn't match the
@@ -165,7 +170,9 @@ class LinuxService(BaseService):
         logger.info("Service stopped.")
 
     def restart(self) -> None:
-        _require_systemctl("restart", UNIT_NAME, error_context="Failed to restart service")
+        _require_systemctl(
+            "restart", UNIT_NAME, error_context="Failed to restart service"
+        )
         logger.info("Service restarted.")
 
     def status(self) -> None:
@@ -192,6 +199,7 @@ class LinuxService(BaseService):
         than at install time) goes here.
         """
         from truenas_api_conduit.core import ensure_config
+
         ensure_config()
         # Hand off to core business logic here.
         # e.g. from truenas_api_conduit.core import run; run()

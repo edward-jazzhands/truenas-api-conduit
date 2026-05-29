@@ -1,10 +1,5 @@
-from typing import Final
-from importlib.metadata import version
-import truenas_api_conduit.core.log_setup as log_setup  # <- this is run on import
-
-APP_NAME: Final = "truenas-api-conduit"
-
-__version__ = version(APP_NAME)
+from truenas_api_conduit.constants import APP_NAME, __version__
+import truenas_api_conduit.log_setup as log_setup  # <- this is run on import
 
 __all__ = [
     "APP_NAME",

@@ -1,5 +1,13 @@
 # Service Architecture Plan
 
+## Philosophy
+
+The "headless service" program we're refering to here we call truenas-api-conduitd - This is written as a normal, foreground terminal program. It prints to stdout/stderr, and it can be called directly. It also does not need to be installed in order to run, it'll work perfectly fine if you just run it yourself without installing. It'll just behave like any other terminal program, ctrl+c to exit and whatnot. Capturing that output is up to the platform implementation when the service is installed.
+
+Thus, we have a clean separation of concerns between the program itself, and the service infrastructure. We can develop the program and accompanying CLI as a standalone program, and worry about implementing the services when it's finished.
+
+When the CLI goes to start the program, it can either tell the service to start it up (requires installation), OR alternatively its possible to make the CLI run it directly. You'd use the proper subcommand/os fork for that so its a separate process.
+
 ## Platform Strategy
 
 | Platform | Mechanism      | Elevation Required |
@@ -31,7 +39,7 @@ your_app/
 │   ├── linux.py          # systemd user unit generator/installer
 │   └── macos.py          # launchd plist generator/installer
 ├── __init__.py           
-├── cli.py                # Click/Rich-Click commands including service subcommands
+├── __main__.py           # Click/Rich-Click commands including service subcommands
 ├── console.py            # Shared rich console(stderr) object
 ```
 
@@ -45,7 +53,7 @@ Three distinct entry points in `pyproject.toml`:
 - `truenas-api` — An alias for `truenas-api-conduit`, literally the exact same thing but with a different name (for convenience)
 - `truenas-api-conduitd` — headless entry point, what the service infrastructure actually calls
 
-The separation exists because services (especially pywin32) need a clean entry point with no Rich/Click interactive machinery attached to it. It also makes PyInstaller tractable later since it needs a clear `__main__` target, and probably help with various other things.
+The separation exists because services (especially pywin32) need a clean entry point with no Rich/Click interactive machinery attached to it. It also makes PyInstaller tractable later since it needs a clear `__main__` target, and follows our general philosophy of not needing to install the program to run it.
 
 ---
 
@@ -61,6 +69,18 @@ truenas-api-conduit status
 ```
 
 All commands route through `get_service_manager()` and call the abstract interface. The CLI layer has no platform-specific logic in it.
+
+---
+
+## Logging to stdout/stderr and the "12 Factor App" pattern for services
+
+The app is aiming for a clean 12 factor app pattern, so all logging is done to stdout/stderr. This is the most portable way to do it, and it's also the easiest to implement. Thus how exactly each platform captures stdout/stderr is up to the platform implementation.
+
+To handle this, Rich for Python is used to print all logging to stdout/stderr (We don't use any print statements, only logging calls which are handled by the RichHandler for stndlib logging). Rich has the ability to know whether or not it's running in a TTY, and if so, it will use colours to make the output more readable. This will allow us (devs) or the end user to run the program in the foreground as a normal standalone program, and get full coloured output.
+
+This is useful for development, but it will also be useful for the end user because it will allow running the "service" without installing it in order to test it out, during which they'll get nice pretty color output to make a good first impression.
+
+This should make things simple for the service program. Service code only needs to make standard logging calls, and how they get printed will be abstracted away at a higher level.
 
 ---
 
@@ -96,7 +116,8 @@ A single `get_service_manager()` factory function resolves the correct implement
 - plist explicitly sets StandardErrorPath to a file in ~/Library/Logs/truenas-api-conduit/ or similar
 - `KeepAlive` set to true for restart-on-crash behavior
 - Activated with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.yourapp.plist`(note: NOT `launchctl load`, that is deprecated)
--the corresponding teardown verb is bootout instead of unload, with the same signature: `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.yourapp.plist`
+- the corresponding teardown verb is bootout instead of unload, with the same signature: `launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.yourapp.plist`
+- Important: launchctl bootstrap will fail silently or with a cryptic error if the plist has any XML syntax errors or invalid keys. Worth building in plist validation (even just running plutil -lint on the generated file) before attempting to load it.
 
 ### Windows — pywin32 Windows Service
 - Windows requires admin/elevation to install

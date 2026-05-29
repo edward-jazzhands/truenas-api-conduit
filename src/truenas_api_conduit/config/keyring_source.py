@@ -6,7 +6,6 @@ import logging
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 
-
 log = logging.getLogger(__name__)
 
 
@@ -28,8 +27,9 @@ class KeyringLookupError(LookupError):
 
 
 class ProgrammerError(RuntimeError):
-    """Raised when the programmer has made a mistake. Useful to differentiate from 
+    """Raised when the programmer has made a mistake. Useful to differentiate from
     user/validation errors."""
+
     pass
 
 
@@ -132,11 +132,10 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
 
         # We also need to ensure the 'keyring' key exists and is set to True
         # (specifically True, and not merely truthy)
-        return (field_info.json_schema_extra.get("keyring") is True)
-
+        return field_info.json_schema_extra.get("keyring") is True
 
     def __call__(self) -> dict[str, Any]:
-            
+
         # This is only called one time when the program launches, so it makes
         # sense to put a lazy import here to improve startup time.
         import keyring
@@ -197,7 +196,7 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
                     "API key as an environment variable or in the config file."
                 )
                 if self.raise_on_missing_key:
-                    log.error(msg+self.raise_msg)
+                    log.error(msg + self.raise_msg)
                     raise
                 else:
                     log.warning(msg)
@@ -210,7 +209,9 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
                 log.error(f"Could not get password from keyring: {e}")
                 raise
             except Exception as e:
-                log.error(f"Unexpected error while trying to get password from keyring: {e}")
+                log.error(
+                    f"Unexpected error while trying to get password from keyring: {e}"
+                )
                 raise
             else:
                 # Under normal circumstances, keyring.get_password() will just return

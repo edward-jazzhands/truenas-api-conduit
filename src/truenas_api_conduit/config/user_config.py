@@ -14,7 +14,8 @@ from pydantic_settings import (
 )
 
 # project
-from truenas_api_conduit import APP_NAME, log_setup
+from truenas_api_conduit import log_setup
+from truenas_api_conduit.console import console_stderr
 from truenas_api_conduit.core import CONFIG_PATH
 from truenas_api_conduit.config.keyring_source import KeyringSettingsSource
 
@@ -27,7 +28,7 @@ if not CONFIG_PATH.exists():
     raise FileNotFoundError(f"Config file not found at {CONFIG_PATH}")
 
 
-config_provenance: dict[str, Any] = {}
+_config_provenance: dict[str, Any] = {}
 
 
 class TrackingSourceMixin:
@@ -37,9 +38,10 @@ class TrackingSourceMixin:
         # Recall, every source returns the dict of k/v pairs it provides
         data: dict[str, Any] = super().__call__()  # type: ignore
         for key in data:  #    ^^^^ super in a Mixin follows MRO
-            if key not in config_provenance:
-                config_provenance[key] = self.source_label
-                log.debug(f"{key} was loaded from {self.source_label}")
+            key_lower = key.lower()
+            if key_lower not in _config_provenance:
+                _config_provenance[key_lower] = self.source_label
+                log.debug(f"{key_lower} was loaded from {self.source_label}")
         return data
 
 
@@ -56,7 +58,7 @@ class TrackingTomlSource(TrackingSourceMixin, TomlConfigSettingsSource):
 
 
 class TrackingInitSource(TrackingSourceMixin, InitSettingsSource):
-    source_label = "init"
+    source_label = "cli"
 
 
 class TrackingKeyringSource(TrackingSourceMixin, KeyringSettingsSource):
@@ -107,7 +109,9 @@ class Config(BaseSettings):
         # 5. Config class defaults
         return (
             TrackingInitSource(settings_cls, init_settings.init_kwargs),
-            TrackingKeyringSource(settings_cls, service="truenas", raise_on_missing_key=False),
+            TrackingKeyringSource(
+                settings_cls, service="truenas", raise_on_missing_key=False
+            ),
             TrackingEnvSource(settings_cls),
             TrackingTomlSource(settings_cls),
         )
@@ -133,11 +137,13 @@ class Config(BaseSettings):
     api_route: str = "/api/current"
     polling_interval: int = 10
     log_level: str = "warning"
+    no_color: bool = Field(default=False, validation_alias="NO_COLOR")
 
     # computed_field decorator docs:
     # https://pydantic.dev/docs/validation/latest/concepts/fields/#the-computed_field-decorator
 
     # Internal settings
+    
     @computed_field
     @property
     def uri(self) -> str:
@@ -145,7 +151,7 @@ class Config(BaseSettings):
 
     @property
     def provenance(self) -> dict[str, str]:
-        return config_provenance
+        return _config_provenance
 
     # field_validator decorator docs:
     # https://pydantic.dev/docs/validation/latest/concepts/validators/#json-schema-and-field-validators
@@ -186,3 +192,12 @@ class Config(BaseSettings):
         log_mapping = logging.getLevelNamesMapping()
         log_setup.set_log_level(log_mapping[self.log_level.upper()])
         log.debug("Config post init: log_level set to %s", self.log_level)
+
+        if self.no_color:
+            log.debug("Config post init: Disabling color output")
+        console_stderr.no_color = self.no_color
+
+        for field, value in Config.model_fields.items():
+            if field not in self.provenance:
+                self.provenance[field] = "default"
+                log.debug(f"{field} was loaded from defaults")

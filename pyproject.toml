@@ -18,9 +18,9 @@ dependencies = [
 ]
 
 [project.scripts]
-truenas-api-conduit = "truenas_api_conduit.cli:cli"
-truenas-api = "truenas_api_conduit.cli:cli"
-truenas-api-daemon = "truenas_api_conduit.daemon:start"
+truenas-api-conduit  = "truenas_api_conduit.__main__:cli"
+truenas-api          = "truenas_api_conduit.__main__:cli"
+truenas-api-conduitd = "truenas_api_conduit.core.__main__:start"
 
 [build-system]
 requires = ["uv_build>=0.9.24,<0.10.0"]

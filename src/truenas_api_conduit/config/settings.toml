@@ -30,3 +30,7 @@ polling_interval = 10
 # on the CLI. -v = info, -vv = debug, -vvv = trace
 # Options: [critical, error, warning, info, debug, trace]  (Default: "warning")
 # log_level = "warning"
+
+# Set to true to disable color output. This is equivalent to using the
+# --no-color flag on the CLI.
+no_color = false

@@ -8,34 +8,25 @@ import time
 import ssl
 from pathlib import Path
 import logging
-
-if TYPE_CHECKING:
-    from truenas_api_conduit.user_config import Config
+import json
+import sys
 
 # third party
+import pydantic
 import websockets
 import websockets.client
 import websockets.legacy.client as legacy_client
 import websockets.exceptions
+from rich.console import Console
 
 # project
-from truenas_api_conduit.setup_app_dir import CONFIG_DIR
-import truenas_api_conduit.api_requests as api_requests
-
-log = logging.getLogger(__name__)
+from truenas_api_conduit.console import console_stderr
+import truenas_api_conduit.log_setup as log_setup
+import truenas_api_conduit.core.api_requests as api_requests
+from truenas_api_conduit.config import Config
 
 UPTIME_OUTPUT = Path("/tmp") / "uptime.txt"
 RECONNECT_DELAY = 5
-
-# Server Metrics I want to collect:
-
-#   - System uptime (days) - system.info
-#   - CPU usage (percent)  - reporting.get_data "{"name":"cpu"}, {"start":$start,"end":$end,"aggregate":true}"
-#   - CPU temperature (degrees C)
-#   - RAM usage (percent)
-#   - Disk usage (percent) - disk.query or possibly pool.query
-#   - Network usage (bytes/s)
-#   - Number of active alerts - alert.list
 
 
 async def websocket_send(
@@ -153,6 +144,7 @@ async def session(cfg: Config):
 
 
 async def session_wrapper(cfg: Config):
+
     # Wraps the entire session so that if the connection drops for any
     # reason, we wait a few seconds and try again.
     while True:
@@ -186,5 +178,54 @@ async def session_wrapper(cfg: Config):
             await asyncio.sleep(RECONNECT_DELAY)
 
 
-def start(cfg: Config):
+def start():
+
+    try:
+        if not sys.stdin.isatty():
+            raw = sys.stdin.read()
+            cfg = Config.model_validate_json(raw)
+        else:
+            cfg = Config()
+    except json.JSONDecodeError as e:
+        log.critical(f"Malformed config JSON: {e}")
+        sys.exit(1)
+    except pydantic.ValidationError as e:
+        log.critical(f"Configuration error: {e}")
+        sys.exit(1)
+
+
+
+    if cfg.no_color:
+        console_stderr.no_color = True
+
+    log_setup.init_logging()
+
+    # Remember the root logger starts at WARNING or ERROR
+    log_mapping = logging.getLevelNamesMapping()
+    level_name: str | None = None
+
+    if cli_options.verbose > 0:
+        if cli_options.verbose == 1:
+            log_level = log_mapping["INFO"]  # 20
+        elif cli_options.verbose == 2:
+            log_level = log_mapping["DEBUG"]  # 10
+        else:
+            log_level = log_mapping["TRACE"]  # 5
+
+        level_name = logging.getLevelName(log_level)
+        log_setup.set_log_level(log_level)
+
+    log_level: int = logging.getLogger().level
+    log.info("Logging level set to %s", log_level)
+
+
+
+
+
+
+
     asyncio.run(session_wrapper(cfg))
+
+
+if __name__ == "__main__":
+    start()

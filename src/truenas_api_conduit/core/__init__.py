@@ -3,20 +3,20 @@ from typing import Final
 from pathlib import Path
 
 from truenas_api_conduit import APP_NAME
-from .detect_platform import Platform
-from . import log_setup
+from .detect_platform import detect
 from .setup_app_dir import ensure_config as _ensure_config
+from .global_enums import Platform, InstallType
 
 __all__ = [
-    "log_setup",
     "ensure_config",
     "Platform",
+    "InstallType",
     "PLATFORM",
     "CONFIG_DIR",
     "CONFIG_PATH",
 ]
 
-PLATFORM: Final = detect_platform.detect()
+PLATFORM: Final = detect()
 
 CONFIG_DIR: Final = (
     Path.home() / ".config" / APP_NAME

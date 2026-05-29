@@ -1,5 +1,15 @@
 from typing import Any
 
+# Server Metrics I want to collect:
+
+#   - System uptime (days) - system.info
+#   - CPU usage (percent)  - reporting.get_data "{"name":"cpu"}, {"start":$start,"end":$end,"aggregate":true}"
+#   - CPU temperature (degrees C)
+#   - RAM usage (percent)
+#   - Disk usage (percent) - disk.query or possibly pool.query
+#   - Network usage (bytes/s)
+#   - Number of active alerts - alert.list
+
 
 def system_info(req_id: int) -> dict[str, Any]:
     """contains the result.uptime stat"""
