@@ -20,7 +20,7 @@ from rich.traceback import install as tb_install
 # project
 from truenas_api_conduit import __version__, APP_NAME, log_setup
 import truenas_api_conduit.core as core
-from truenas_api_conduit.console import console_stderr
+from truenas_api_conduit.console import console_stderr, console_stdout
 
 # rich tracebacks
 tb_install(console=console_stderr, show_locals=False)
@@ -345,12 +345,12 @@ global_options = [
 ]
 
 
-@click.group(cls=CustomGroup)
+@click.group(cls=CustomGroup, context_settings={"rich_console": console_stdout})
 @click.command_panel("Main", commands=main_commands)
 @click.command_panel("Config", commands=config_commands)
 @common_options
 @click.pass_context
-def cli(ctx: click.Context) -> None:
+def cli(ctx: click.RichContext) -> None:
     """TrueNAS API Conduit - A websocket proxy service for the TrueNAS API.
 
     This will hold the websocket connection open so that subsequent requests can
@@ -372,7 +372,7 @@ package_help = """This is intended to be used by package managers"""
 @common_options
 @click.pass_context
 def install(
-    ctx: click.Context,
+    ctx: click.RichContext,
     system: bool = False,
     package: bool = False,
 ) -> None:
@@ -402,7 +402,7 @@ def install(
 @cli.command()
 @common_options
 @click.pass_context
-def uninstall(ctx: click.Context) -> None:
+def uninstall(ctx: click.RichContext) -> None:
     """Uninstall the TrueNAS API Conduit service"""
     pass
 
@@ -416,7 +416,7 @@ run by your service manager). Does not require installation"""
 @click.option("--foreground", "-fg", is_flag=True, default=False, help=foreground_help)
 @common_options
 @click.pass_context
-def start(ctx: click.Context, foreground: bool) -> None:
+def start(ctx: click.RichContext, foreground: bool) -> None:
     """Tells your OS to start the TrueNAS API Conduit service. You can also start
     the program directly as a standalone program without installing by using the
     --foreground option"""
@@ -443,7 +443,7 @@ def start(ctx: click.Context, foreground: bool) -> None:
 @cli.command()
 @common_options
 @click.pass_context
-def stop(ctx: click.Context) -> None:
+def stop(ctx: click.RichContext) -> None:
     """Stop the TrueNAS API Conduit service"""
     pass
 
@@ -451,7 +451,7 @@ def stop(ctx: click.Context) -> None:
 @cli.command()
 @common_options
 @click.pass_context
-def restart(ctx: click.Context) -> None:
+def restart(ctx: click.RichContext) -> None:
     """Restart the TrueNAS API Conduit service"""
     pass
 
@@ -459,7 +459,7 @@ def restart(ctx: click.Context) -> None:
 @cli.command()
 @common_options
 @click.pass_context
-def status(ctx: click.Context) -> None:
+def status(ctx: click.RichContext) -> None:
     """Check the status of the TrueNAS API Conduit service"""
     pass
 
@@ -467,21 +467,36 @@ def status(ctx: click.Context) -> None:
 @cli.command()
 @main_commands_options
 @common_options
+@click.argument("method", help="The method to call (ex: system.info)", required=True)
+@click.option("--params", "-p", help="The params to pass to the method")
 @click.pass_context
-def request(ctx: click.Context) -> None:
+def request(
+    ctx: click.RichContext,
+    method: str,
+    params: list[Any] | None = None,
+) -> None:
     """Make a request, using the service if it's running. Otherwise, the program
     will open a websocket connection, make the request, and close the connection"""
 
-    # TODO: Implement request
-    log.debug("Making request")
+    assert isinstance(ctx.obj, CLIOptions)
+    assert ctx.console is not None
     log.debug("Context: %s", ctx.obj.__dict__)
-    pass
+    cfg = common_setup(ctx.obj)
+
+    log.debug("Making request")
+    import requests
+
+    response = requests.post(
+        f"http://127.0.0.1:{cfg.socket_port}/rpc",
+        json={"method": method, "params": params if params else []}
+    )
+    ctx.console.print(response.json())
 
 
 @cli.command()
 @common_options
 @click.pass_context
-def set_key(ctx: click.Context) -> None:
+def set_key(ctx: click.RichContext) -> None:
     """Sets the API key using whatever compatible keyring/secrets manager is
     available on your system"""
 
@@ -494,7 +509,7 @@ def set_key(ctx: click.Context) -> None:
 @cli.command()
 @common_options
 @click.pass_context
-def config(ctx: click.Context) -> None:
+def config(ctx: click.RichContext) -> None:
     """Attempts to open the config file in your editor, if $EDITOR is set"""
 
     editor = os.environ.get("EDITOR")
@@ -506,7 +521,7 @@ def config(ctx: click.Context) -> None:
 @cli.command()
 @common_options
 @click.pass_context
-def config_path(ctx: click.Context) -> None:
+def config_path(ctx: click.RichContext) -> None:
     """Prints the path to the config file"""
 
     click.echo(core.CONFIG_PATH)  # stays clean/pure for piping
@@ -521,7 +536,7 @@ def config_path(ctx: click.Context) -> None:
 @cli.command()
 @common_options
 @click.pass_context
-def print_config(ctx: click.Context) -> None:
+def print_config(ctx: click.RichContext) -> None:
     """Outputs your current configuration as JSON to stdout. Logging/debug
     is separated out to stderr"""
 

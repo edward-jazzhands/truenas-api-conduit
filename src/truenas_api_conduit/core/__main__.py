@@ -40,16 +40,23 @@ log = logging.getLogger(__name__)
 
 
 async def request_handler(request: web.Request) -> web.Response:
+    "Take request in json-rpc, return response in json-rpc"
 
     # This is the callback for the /rpc endpoint
     # The API for the client is simple. We only need to create the client,
     # run client.connect(), then it can be called as an awaitable function.
 
-    payload = await request.json()  # JSON-RPC payload
+    try:
+        payload = await request.json()  # JSON-RPC payload
+    except json.JSONDecodeError as e:
+        log.error("Malformed request, skipping: %s", e)
+        return web.json_response({"error": "Malformed request"}, status=400)
+
+    log.debug("Request payload: %s", payload)
 
     client: TrueNASClient = request.app["truenas"]
     result = await client(payload)
-    log.debug(f"Response: {result}")
+    log.debug("Response: %s,", result)
 
     # Return result back to CLI as JSON
     return web.json_response(result)
@@ -96,10 +103,10 @@ def start():
             source = "standard"
             cfg = Config()
     except json.JSONDecodeError as e:
-        log.critical(f"Malformed config JSON: {e}")
+        log.critical("Malformed config JSON: %s", e)
         sys.exit(1)
     except pydantic.ValidationError as e:
-        log.critical(f"Configuration error: {e}")
+        log.critical("Configuration error: %s", e)
         sys.exit(1)
 
     log_level: int = logging.getLogger().level
@@ -108,7 +115,7 @@ def start():
     log.debug("Config: %s", cfg)
     log.debug("Config provenance: %s", cfg.provenance)
 
-    app = web.Application() # ! should I insert our logger here?
+    app = web.Application() 
     app["config"] = cfg  #   so startup hooks can access it
 
     # HTTP endpoint for the CLI

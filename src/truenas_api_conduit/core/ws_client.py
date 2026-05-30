@@ -78,9 +78,9 @@ def _write_results(msg: dict[str, Any]) -> None:
         tmp.write_text(str(uptime) + "\n")
         tmp.replace(UPTIME_OUTPUT)
 
-        log.debug(f"Uptime: {uptime}")
+        log.debug("Uptime: %s", uptime)
     else:
-        log.error(f"Unexpected response: {msg}")
+        log.error("Unexpected response: %s", msg)
 
 
 
@@ -144,7 +144,7 @@ class TrueNASClient:
                 raise
             sys.exit(1)
         except OSError as e:
-            log.error(f"OS Connection error: {e} {e.__class__}")
+            log.error("OS Connection error: %s %s", e, e.__class__)
             if self.config.log_level == "trace":
                 raise
             sys.exit(1)
@@ -163,7 +163,7 @@ class TrueNASClient:
         try:
             auth_response = json.loads(raw)
         except json.JSONDecodeError as e:
-            log.error(f"Malformed response in auth: {e}")
+            log.error("Malformed response in auth: %s", e)
             await self.ws_conn.close()
             return
 
@@ -181,7 +181,7 @@ class TrueNASClient:
         await self.ws_conn.close()
 
     async def _reconnect(self) -> None:
-        log.info(f"Reconnecting in {RECONNECT_DELAY}s...")
+        log.info("Reconnecting in %s seconds...", RECONNECT_DELAY)
         await asyncio.sleep(RECONNECT_DELAY)
         await self.connect()
 
@@ -207,11 +207,15 @@ class TrueNASClient:
         if not self.authenticated:
             raise RuntimeError("Websocket client is not authenticated")
 
-        req_id = payload["id"]
+        payload["jsonrpc"] = "2.0"  #  in case its not set already
+        if "id" not in payload:     #  in case client supplies id
+            payload["id"] = self.req_id
+            self.req_id += 1
+        
         loop = asyncio.get_running_loop()
-
         future: asyncio.Future[dict[str, Any]] = loop.create_future()
-        self.pending[req_id] = future  #    so the reader loop can find it later
+
+        self.pending[payload["id"]] = future  # so the reader loop can find it
 
         await self.ws_conn.send(json.dumps(payload))
         return await future
@@ -235,7 +239,7 @@ class TrueNASClient:
                 try:
                     data = json.loads(msg)
                 except json.JSONDecodeError as e:
-                    log.error(f"Malformed response, skipping: {e}")
+                    log.error("Malformed response, skipping: %s", e)
                     continue
 
                 try:
@@ -250,7 +254,7 @@ class TrueNASClient:
                     log.warning(f"No pending future for request ID {req_id}, skipping")
                     continue
 
-                log.info(f"Request #{req_id} was successful")
+                log.info("Request #%s was successful", req_id)
 
                 # The future was awaited in the __call__ method. So when we
                 # set the result, this signals to the original caller (aiohttp)
@@ -258,11 +262,11 @@ class TrueNASClient:
                 future.set_result(data)
 
         except ws_exceptions.ConnectionClosedError as e:
-            log.error(f"Connection closed unexpectedly: {e}")
+            log.error("Connection closed unexpectedly: %s", e)
         except ws_exceptions.WebSocketException as e:
-            log.error(f"Websocket error: {e} {e.__class__}\n")
+            log.error("Websocket error: %s %s\n", e, e.__class__)
         except Exception as e:
-            log.error(f"Unknown reader loop error: {e}")
+            log.error("Unknown reader loop error: %s", e)
             raise
         finally:
             # Any futures still waiting will never get a response, fail them
