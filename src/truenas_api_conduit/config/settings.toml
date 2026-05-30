@@ -34,3 +34,8 @@ polling_interval = 10
 # Set to true to disable color output. This is equivalent to using the
 # --no-color flag on the CLI.
 no_color = false
+
+# The internal socket port for the TrueNAS API Conduit service. This is used
+# by the CLI to send requests to the service. It's arbitrary and you can
+# change it if you need to. (default: 4567)
+# socket_port = 4567

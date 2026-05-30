@@ -71,11 +71,6 @@ class CLIOptions:
 def common_setup(cli_options: CLIOptions) -> Config:
 
     nc_env = os.environ.get("NO_COLOR")
-
-    print(nc_env)
-    print(cli_options.no_color)
-
-
     if nc_env is not None or cli_options.no_color:
         console_stderr.no_color = True
 
@@ -144,13 +139,31 @@ def common_setup(cli_options: CLIOptions) -> Config:
         )
         doc_split = e.doc.splitlines()
         relevant_lines = doc_split[e.lineno-3:e.lineno+2]
-        bad_line = doc_split[e.lineno-1]
+        
         for i, line in enumerate(relevant_lines):
-            err_string += f"{(e.lineno-2)+i} | "
+            current_line = (e.lineno-2)+i   
+            is_bad_line = False
+
+            if current_line == e.lineno:
+                is_bad_line = True
+                err_string += f">>> "
+            else:
+                err_string += f"    "
+            if current_line <= 9:
+                err_string += " "
+
+            err_string += f"{current_line} | "
+
             if line.strip().startswith("#"):
                 err_string += f"[gray50]{line}[/gray50]\n"
-            else:
+            elif is_bad_line:
                 err_string += f"[bright_yellow]{line}[/bright_yellow]\n"
+            else:
+                err_string += f"{line}\n"
+
+        # Error help/suggestions
+
+        bad_line = doc_split[e.lineno-1]
         for word in ["True", "False"]:
             if word in bad_line:
                 err_string += f"\nYou used '{word}' with a capital {word[0]}. "
@@ -163,6 +176,7 @@ def common_setup(cli_options: CLIOptions) -> Config:
             err_string += f"Did you forget to close it?\n"   
         if bad_line.count("'") == 0 and bad_line.count('"') == 0:
             err_string += "\nTip: does it need to be enclosed in quotes?\n"
+        
         console_stderr.print(Panel(err_string, style="red"))
         sys.exit(1)
 
@@ -186,7 +200,7 @@ def common_setup(cli_options: CLIOptions) -> Config:
 
     log.info("Config loaded successfully")
     log.debug(cfg)
-    provenance_str = "Config provenance:\n"
+    provenance_str = "Config provenance:\n\n"
     for field, source in cfg.provenance.items():
         provenance_str += f"{field}: {source}\n"
     log.info(provenance_str)
@@ -218,11 +232,13 @@ def common_setup(cli_options: CLIOptions) -> Config:
 
 
 def set_verbose_param(ctx: click.Context, param: click.Parameter, value: int) -> int:
+    ctx.ensure_object(CLIOptions)
     assert isinstance(ctx.obj, CLIOptions)
     ctx.obj.verbose = value
     return value
 
 def set_no_color_param(ctx: click.Context, param: click.Parameter, value: bool) -> bool:
+    ctx.ensure_object(CLIOptions)
     assert isinstance(ctx.obj, CLIOptions)
     ctx.obj.no_color = value
     return value
@@ -241,7 +257,8 @@ def set_key_param(ctx: click.Context, param: click.Parameter, value: str) -> str
 verbose_help = """Sets the verbosity/logging level. -v for info, \
 -vv for debug, -vvv for trace"""
 
-no_color_help = """Disables color output. You can also set the NO_COLOR environment variable."""
+no_color_help = """Disables color output. You can also set the NO_COLOR environment
+variable to fully disable color in the help menu"""
 
 
 def common_options(f: Callable) -> Callable:
@@ -274,12 +291,12 @@ def common_options(f: Callable) -> Callable:
 
 truenas_host_help = """The address that you use to access the TrueNAS Web UI over HTTPS.
 You can also set the [orange1]truenas_host[/orange1] field in the config file, or set an
-environment variable named [orange1]TRUENAS_HOST[/orange1]."""
+environment variable named [orange1]TRUENAS_HOST[/orange1]"""
 
 api_key_help = """Your TrueNAS API key. You can also use the
 [deep_sky_blue1]set-key[/deep_sky_blue1] command (recommended), set an environment variable
 named [orange1]TRUENAS_API_KEY[/orange1], or set the [orange1]api_key[/orange1] field
- in the config file."""
+ in the config file"""
 
 def main_commands_options(f: Callable) -> Callable:
     f = click.option(
@@ -322,17 +339,23 @@ config_commands = [
     "print_config",
 ]
 
+global_options = [
+    "verbose",
+    "no_color",
+]
+
 
 @click.group(cls=CustomGroup)
 @click.command_panel("Main", commands=main_commands)
 @click.command_panel("Config", commands=config_commands)
+@common_options
 @click.pass_context
 def cli(ctx: click.Context) -> None:
     """TrueNAS API Conduit - A websocket proxy service for the TrueNAS API.
 
     This will hold the websocket connection open so that subsequent requests can
     re-use the same connection. It can be installed as a service, or run as a
-    standalone program without installing."""
+    standalone program without installing"""
 
     ctx.ensure_object(CLIOptions)
 
@@ -355,16 +378,13 @@ def install(
 ) -> None:
     """Install the TrueNAS API Conduit service. On Linux and MacOS, the default
     is to install as a user service and does not require elevation. On Windows,
-    elevation is required to install.
-    """
+    elevation is required to install"""
 
     if system and package:
         raise click.UsageError("You cannot specify both --system and --package")
 
     assert isinstance(ctx.obj, CLIOptions)
     cfg = common_setup(ctx.obj)
-
-    
 
     from truenas_api_conduit.service import get_service_manager
     from truenas_api_conduit.core import PLATFORM, InstallType
@@ -383,12 +403,12 @@ def install(
 @common_options
 @click.pass_context
 def uninstall(ctx: click.Context) -> None:
-    """Uninstall the TrueNAS API Conduit service."""
+    """Uninstall the TrueNAS API Conduit service"""
     pass
 
 
 foreground_help = """Starts the service as a standalone program in the foreground (not
-run by your service manager). This is useful for debugging and development"""
+run by your service manager). Does not require installation"""
 
 
 @cli.command()
@@ -399,7 +419,7 @@ run by your service manager). This is useful for debugging and development"""
 def start(ctx: click.Context, foreground: bool) -> None:
     """Tells your OS to start the TrueNAS API Conduit service. You can also start
     the program directly as a standalone program without installing by using the
-    --foreground option."""
+    --foreground option"""
 
     assert isinstance(ctx.obj, CLIOptions)
     cfg = common_setup(ctx.obj)
@@ -424,7 +444,7 @@ def start(ctx: click.Context, foreground: bool) -> None:
 @common_options
 @click.pass_context
 def stop(ctx: click.Context) -> None:
-    """Stop the TrueNAS API Conduit service."""
+    """Stop the TrueNAS API Conduit service"""
     pass
 
 
@@ -432,7 +452,7 @@ def stop(ctx: click.Context) -> None:
 @common_options
 @click.pass_context
 def restart(ctx: click.Context) -> None:
-    """Restart the TrueNAS API Conduit service."""
+    """Restart the TrueNAS API Conduit service"""
     pass
 
 
@@ -440,7 +460,7 @@ def restart(ctx: click.Context) -> None:
 @common_options
 @click.pass_context
 def status(ctx: click.Context) -> None:
-    """Check the status of the TrueNAS API Conduit service."""
+    """Check the status of the TrueNAS API Conduit service"""
     pass
 
 
@@ -450,7 +470,7 @@ def status(ctx: click.Context) -> None:
 @click.pass_context
 def request(ctx: click.Context) -> None:
     """Make a request, using the service if it's running. Otherwise, the program
-    will open a websocket connection, make the request, and close the connection."""
+    will open a websocket connection, make the request, and close the connection"""
 
     # TODO: Implement request
     log.debug("Making request")
@@ -463,7 +483,7 @@ def request(ctx: click.Context) -> None:
 @click.pass_context
 def set_key(ctx: click.Context) -> None:
     """Sets the API key using whatever compatible keyring/secrets manager is
-    available on your system."""
+    available on your system"""
 
     log.debug("Setting API key")
     import keyring
@@ -475,11 +495,11 @@ def set_key(ctx: click.Context) -> None:
 @common_options
 @click.pass_context
 def config(ctx: click.Context) -> None:
-    """Attempts to open the config file in your editor, if $EDITOR is set."""
+    """Attempts to open the config file in your editor, if $EDITOR is set"""
 
     editor = os.environ.get("EDITOR")
     if not editor:
-        raise click.UsageError("No editor set. Set the $EDITOR environment variable.")
+        raise click.UsageError("No editor set. Set the $EDITOR environment variable")
     os.execvp(editor, [editor, core.CONFIG_PATH])
 
 
@@ -487,7 +507,7 @@ def config(ctx: click.Context) -> None:
 @common_options
 @click.pass_context
 def config_path(ctx: click.Context) -> None:
-    """Prints the path to the config file."""
+    """Prints the path to the config file"""
 
     click.echo(core.CONFIG_PATH)  # stays clean/pure for piping
     console_stderr.print(f"Created already?: {core.CONFIG_PATH.exists()}")

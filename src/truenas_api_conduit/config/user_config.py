@@ -54,7 +54,7 @@ class TrackingEnvSource(TrackingSourceMixin, EnvSettingsSource):
 
 
 class TrackingTomlSource(TrackingSourceMixin, TomlConfigSettingsSource):
-    source_label = "toml"
+    source_label = "config file"
 
 
 class TrackingInitSource(TrackingSourceMixin, InitSettingsSource):
@@ -123,6 +123,9 @@ class Config(BaseSettings):
     # "TRUENAS_HOST", because otherwise it would be TRUENAS_TRUENAS_HOST. The same
     # goes for `truenas_cert_path`.
 
+    # Oh there's also now a third validation alias: "NO_COLOR". This is because
+    # Rich-Click also uses that env var to disable color, so we use the same one.
+
     # NOTE: using default=... is a way to tell pydantic that the field is required,
     # while also preventing it from being a required constructor argument.
     # It signals to Pyright that Pydantic will take care of the validation.
@@ -138,13 +141,13 @@ class Config(BaseSettings):
     polling_interval: int = 10
     log_level: str = "warning"
     no_color: bool = Field(default=False, validation_alias="NO_COLOR")
+    socket_port: int = 4567
 
     # computed_field decorator docs:
     # https://pydantic.dev/docs/validation/latest/concepts/fields/#the-computed_field-decorator
 
     # Internal settings
     
-    @computed_field
     @property
     def uri(self) -> str:
         return f"wss://{self.truenas_host}{self.api_route}"
