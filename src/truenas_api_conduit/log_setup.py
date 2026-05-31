@@ -82,7 +82,7 @@ def init_logging():
     rich_handler_libraries.setFormatter(libformatter)
 
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.ERROR)
+    root_logger.setLevel(logging.WARNING)
     root_logger.addHandler(rich_handler_normal)
 
     global _handlers_storage

@@ -102,6 +102,16 @@ class TrueNASClient:
         self.req_id = 1
         self.authenticated: bool = False
 
+    def status(self) -> dict[str, Any]:
+        return {
+            "authenticated": self.authenticated,
+            "req_id": self.req_id,
+            "ws_conn host": self.ws_conn._host,
+            "ws_conn port": self.ws_conn._port,
+            "ws_conn secure": self.ws_conn._secure,
+            "pending": len(self.pending),
+        }
+
     def make_rpc_request(
         self,
         method: str,

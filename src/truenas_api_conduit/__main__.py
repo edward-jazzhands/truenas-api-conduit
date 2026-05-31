@@ -2,7 +2,6 @@
 import signal
 import sys
 import logging
-import subprocess
 import os
 from typing import Any, Callable, TYPE_CHECKING
 from dataclasses import dataclass
@@ -38,7 +37,7 @@ click.rich_click.USE_RICH_MARKUP = True
 
 
 def handle_exit(*_):
-    print("\nShutting down.")
+    console_stderr.print("\nShutting down.")
     sys.exit(0)
 
 
@@ -53,6 +52,12 @@ if sys.platform != "win32":
     signal.signal(signal.SIGQUIT, handle_exit)
 
 
+MENU_COLORS: dict[str, str] = {
+    "command": "deep_sky_blue1",
+    "envvar": "orange1",
+    "option": "bold cyan",
+}
+
 @dataclass
 class CLIOptions:
     """dataclass\n
@@ -60,6 +65,7 @@ class CLIOptions:
     api_key: str | None = None
     truenas_host: str | None = None
     verbose: int = 0
+    no_color: bool | None = None
     """
 
     api_key: str | None = None
@@ -92,7 +98,14 @@ def common_setup(cli_options: CLIOptions) -> Config:
         log_setup.set_log_level(log_level)
 
     log_level: int = logging.getLogger().level
-    log.info("Logging level set to %s", log_level)
+    log.info("Logging level currently set to %s", log_level)
+    log.info(cli_options)
+
+    if cli_options.api_key:
+        log.debug("Prompting for API key")
+        api_key = click.prompt("Enter your TrueNAS API key", hide_input=True)
+    else:
+        api_key = None
 
     # Creating an args dict because we only want to pass in the args that the user
     # passed in through the CLI. You can't pass None values to the Config class because
@@ -101,7 +114,7 @@ def common_setup(cli_options: CLIOptions) -> Config:
         "log_level": level_name,
         "no_color": cli_options.no_color,
         "truenas_host": cli_options.truenas_host,
-        "api_key": cli_options.api_key,
+        "api_key": api_key,
     }
     args_dict = {k: v for k, v in to_filter.items() if v is not None}
 
@@ -199,11 +212,11 @@ def common_setup(cli_options: CLIOptions) -> Config:
             sys.exit(1)
 
     log.info("Config loaded successfully")
-    log.debug(cfg)
+    log.info(cfg)
     provenance_str = "Config provenance:\n\n"
     for field, source in cfg.provenance.items():
-        provenance_str += f"{field}: {source}\n"
-    log.info(provenance_str)
+        provenance_str += f"  {field}: {source}\n"
+    log.debug(cfg.provenance)
     return cfg
 
 
@@ -230,35 +243,36 @@ def common_setup(cli_options: CLIOptions) -> Config:
 # I researched all the possible ways to solve this problem, and this seems to be
 # the most recommended one.
 
+# GLOBAL OPTIONS
+
+# NOTE: Because these are global options, they will actually run more than once
+# on subcommands. This is unfortunately necessary for this pattern to work.
+# So in order to prevent that from being an issue, these options will do a
+# check to see if the value was already set. If so it will not overwrite it.
 
 def set_verbose_param(ctx: click.Context, param: click.Parameter, value: int) -> int:
     ctx.ensure_object(CLIOptions)
-    assert isinstance(ctx.obj, CLIOptions)
-    ctx.obj.verbose = value
+    if ctx.obj.verbose == 0:  #  this means it was not changed yet
+        ctx.obj.verbose = value
     return value
 
 def set_no_color_param(ctx: click.Context, param: click.Parameter, value: bool) -> bool:
     ctx.ensure_object(CLIOptions)
-    assert isinstance(ctx.obj, CLIOptions)
-    ctx.obj.no_color = value
+    if ctx.obj.no_color is None:
+        ctx.obj.no_color = value
     return value
 
+# MAIN COMMAND OPTIONS
+
 def set_truenas_host_param(ctx: click.Context, param: click.Parameter, value: str) -> str:
-    assert isinstance(ctx.obj, CLIOptions)
+    ctx.ensure_object(CLIOptions)
     ctx.obj.truenas_host = value
     return value
 
 def set_key_param(ctx: click.Context, param: click.Parameter, value: str) -> str:
-    assert isinstance(ctx.obj, CLIOptions)
+    ctx.ensure_object(CLIOptions)
     ctx.obj.api_key = value
     return value
-
-
-verbose_help = """Sets the verbosity/logging level. -v for info, \
--vv for debug, -vvv for trace"""
-
-no_color_help = """Disables color output. You can also set the NO_COLOR environment
-variable to fully disable color in the help menu"""
 
 
 def common_options(f: Callable) -> Callable:
@@ -289,19 +303,12 @@ def common_options(f: Callable) -> Callable:
     # returned by click.option.
 
 
-truenas_host_help = """The address that you use to access the TrueNAS Web UI over HTTPS.
-You can also set the [orange1]truenas_host[/orange1] field in the config file, or set an
-environment variable named [orange1]TRUENAS_HOST[/orange1]"""
-
-api_key_help = """Your TrueNAS API key. You can also use the
-[deep_sky_blue1]set-key[/deep_sky_blue1] command (recommended), set an environment variable
-named [orange1]TRUENAS_API_KEY[/orange1], or set the [orange1]api_key[/orange1] field
- in the config file"""
-
 def main_commands_options(f: Callable) -> Callable:
     f = click.option(
         "--api-key",
         callback=set_key_param,
+        is_flag=True,
+        default=None,
         expose_value=False,
         help=api_key_help,
     )(f)
@@ -314,6 +321,29 @@ def main_commands_options(f: Callable) -> Callable:
     return f
 
 
+
+truenas_host_help = f"""The address that you use to access the TrueNAS Web UI over
+HTTPS. You can also set the [{MENU_COLORS['envvar']}]truenas_host[/{MENU_COLORS['envvar']}]
+field in the config file, or set an environment variable named
+[{MENU_COLORS['envvar']}]TRUENAS_HOST[/{MENU_COLORS['envvar']}]"""
+
+api_key_help = f"""Ask to be prompted for your TrueNAS API key. You can also use the
+[{MENU_COLORS['command']}]set-key[/{MENU_COLORS['command']}] command (recommended),
+set an environment variable named
+[{MENU_COLORS['envvar']}]TRUENAS_API_KEY[/{MENU_COLORS['envvar']}], or set the
+[{MENU_COLORS['envvar']}]api_key[/{MENU_COLORS['envvar']}] field in the config file"""
+
+verbose_help = f"""Sets the verbosity/logging level.
+[{MENU_COLORS['option']}]-v[/{MENU_COLORS['option']}] for info,
+[{MENU_COLORS['option']}]-vv[/{MENU_COLORS['option']}] for debug,
+[{MENU_COLORS['option']}]-vvv[/{MENU_COLORS['option']}] for trace"""
+
+no_color_help = f"""Disables color output. You can also set the
+[{MENU_COLORS['envvar']}]NO_COLOR[/{MENU_COLORS['envvar']}] environment variable to fully
+disable color including the help menu"""
+
+
+
 # NOTE: When using click.group() as the main command, it will automatically show
 # the --help message when no subcommands are specified.
 
@@ -324,11 +354,11 @@ class CustomGroup(DYMMixin, click.RichGroup):  # Adds click-didyoumean
 
 main_commands = [
     "request",
+    "install",
     "start",
     "stop",
     "restart",
     "status",
-    "install",
     "uninstall",
 ]
 
@@ -345,8 +375,12 @@ global_options = [
 ]
 
 
-@click.group(cls=CustomGroup, context_settings={"rich_console": console_stdout})
-@click.command_panel("Main", commands=main_commands)
+context = {
+    "rich_console": console_stdout,
+}
+
+@click.group(cls=CustomGroup, context_settings=context)
+@click.command_panel("Commands", commands=main_commands)
 @click.command_panel("Config", commands=config_commands)
 @common_options
 @click.pass_context
@@ -357,7 +391,23 @@ def cli(ctx: click.RichContext) -> None:
     re-use the same connection. It can be installed as a service, or run as a
     standalone program without installing"""
 
-    ctx.ensure_object(CLIOptions)
+    # NOTE: having the common_options decorator on the main group means those 
+    # options are visible in the main help menu which is important for UX. It
+    # also means a user can apply a global option to the main command
+    # (as you can typically do with Click-based apps), like so:
+    #    1) >>> truenas-api -vv start
+    # as well as:
+    #    2) >>> truenas-api start -vv
+
+    # Click normally forces passing global options to the main command (like #1)
+    # but my system allows you to additionally use style #2. The options will
+    # show up in the main help menu as well as the individual help menus for
+    # each command. Rich-Click helps a lot for making this look nice with
+    # the command_panel decorators (above).
+
+    # But we do not want to run the common_setop function here, because it
+    # does the full initialization of the config and logging. Some commands
+    # do not require this.
 
 
 system_help = """Installs the service as a system service. This requires elevation"""
@@ -403,28 +453,39 @@ def install(
 @common_options
 @click.pass_context
 def uninstall(ctx: click.RichContext) -> None:
-    """Uninstall the TrueNAS API Conduit service"""
+    """Uninstall the conduit service"""
     pass
 
 
 foreground_help = """Starts the service as a standalone program in the foreground (not
 run by your service manager). Does not require installation"""
 
+start_help = f"""Tell your OS to start the conduit service. You can also
+start the program directly as a standalone program without installing by using the
+[{MENU_COLORS['option']}]--standalone[/{MENU_COLORS['option']}] option, which runs in
+the foreground by default. Tip: to run standalone in the background, use:
+[{MENU_COLORS['command']}]truenas-api start & disown[/{MENU_COLORS['command']}]
+(Mac + Linux) or
+[{MENU_COLORS['command']}]Start-Process truenas-api start[/{MENU_COLORS['command']}]
+(Windows)"""
 
-@cli.command()
+@cli.command(help=start_help)
+@click.option("--standalone", is_flag=True, default=False, help=foreground_help)
 @main_commands_options
-@click.option("--foreground", "-fg", is_flag=True, default=False, help=foreground_help)
 @common_options
 @click.pass_context
-def start(ctx: click.RichContext, foreground: bool) -> None:
-    """Tells your OS to start the TrueNAS API Conduit service. You can also start
-    the program directly as a standalone program without installing by using the
-    --foreground option"""
+def start(ctx: click.RichContext, standalone: bool) -> None:
+
+    if ctx.obj.verbose > 1:
+        if ctx.obj.no_color:
+            click.echo(ctx.obj)
+        else:
+            console_stderr.print(ctx.obj)
 
     assert isinstance(ctx.obj, CLIOptions)
     cfg = common_setup(ctx.obj)
 
-    if foreground:
+    if standalone:
         log.info("Starting service in foreground")
 
         os.environ["TAC_CONFIG"] = cfg.model_dump_json()
@@ -439,12 +500,52 @@ def start(ctx: click.RichContext, foreground: bool) -> None:
 
         # service.start(cfg)
 
+request_help = f"""Make a request using the service. The service must be running.\n
+Example: [{MENU_COLORS['command']}]truenas-api request system.info[/{MENU_COLORS['command']}]
+"""
+
+@cli.command(help=request_help)
+@click.argument("method", help="The method to call (ex: system.info)", required=True)
+@click.option("--params", "-p", help="The params to pass to the method")
+@main_commands_options
+@common_options
+@click.pass_context
+def request(
+    ctx: click.RichContext,
+    method: str,
+    params: str | None = None,
+) -> None:
+    
+    assert isinstance(ctx.obj, CLIOptions)
+    assert ctx.console is not None
+    cfg = common_setup(ctx.obj)
+
+    log.debug("Making request")
+    import requests
+    import json
+    import yaspin
+
+    params_list: list[Any] = []
+    if params:
+        log.debug("Method: %s | Params: %s", method, params)
+        try:
+            params_list = json.loads(params)
+        except json.JSONDecodeError as e:
+            raise click.UsageError(f"Malformed params: {e}")
+
+    with yaspin.yaspin(text="Sending request..."):
+        response = requests.post(
+            f"http://127.0.0.1:{cfg.socket_port}/rpc",
+            json={"method": method, "params": params_list}
+        )
+    ctx.console.print(response.json())
+
 
 @cli.command()
 @common_options
 @click.pass_context
 def stop(ctx: click.RichContext) -> None:
-    """Stop the TrueNAS API Conduit service"""
+    """Stop the conduit service"""
     pass
 
 
@@ -452,7 +553,7 @@ def stop(ctx: click.RichContext) -> None:
 @common_options
 @click.pass_context
 def restart(ctx: click.RichContext) -> None:
-    """Restart the TrueNAS API Conduit service"""
+    """Restart the conduit service"""
     pass
 
 
@@ -460,37 +561,17 @@ def restart(ctx: click.RichContext) -> None:
 @common_options
 @click.pass_context
 def status(ctx: click.RichContext) -> None:
-    """Check the status of the TrueNAS API Conduit service"""
-    pass
-
-
-@cli.command()
-@main_commands_options
-@common_options
-@click.argument("method", help="The method to call (ex: system.info)", required=True)
-@click.option("--params", "-p", help="The params to pass to the method")
-@click.pass_context
-def request(
-    ctx: click.RichContext,
-    method: str,
-    params: list[Any] | None = None,
-) -> None:
-    """Make a request, using the service if it's running. Otherwise, the program
-    will open a websocket connection, make the request, and close the connection"""
+    """Check the status of the conduit service"""
 
     assert isinstance(ctx.obj, CLIOptions)
     assert ctx.console is not None
-    log.debug("Context: %s", ctx.obj.__dict__)
     cfg = common_setup(ctx.obj)
 
     log.debug("Making request")
     import requests
 
-    response = requests.post(
-        f"http://127.0.0.1:{cfg.socket_port}/rpc",
-        json={"method": method, "params": params if params else []}
-    )
-    ctx.console.print(response.json())
+    response = requests.post(f"http://127.0.0.1:{cfg.socket_port}/status")
+    click.echo(response.json())
 
 
 @cli.command()
@@ -505,13 +586,14 @@ def set_key(ctx: click.RichContext) -> None:
 
     # TODO: Implement set API key
 
+config_help = f"""Attempts to open the config file in your editor, if
+[{MENU_COLORS['envvar']}]$EDITOR[/{MENU_COLORS['envvar']}] is set"""
 
-@cli.command()
+@cli.command(help=config_help)
 @common_options
 @click.pass_context
 def config(ctx: click.RichContext) -> None:
-    """Attempts to open the config file in your editor, if $EDITOR is set"""
-
+    
     editor = os.environ.get("EDITOR")
     if not editor:
         raise click.UsageError("No editor set. Set the $EDITOR environment variable")
@@ -537,8 +619,8 @@ def config_path(ctx: click.RichContext) -> None:
 @common_options
 @click.pass_context
 def print_config(ctx: click.RichContext) -> None:
-    """Outputs your current configuration as JSON to stdout. Logging/debug
-    is separated out to stderr"""
+    """Validates and outputs your current configuration as JSON to stdout.
+    Logging/debug is separated out to stderr"""
 
     assert isinstance(ctx.obj, CLIOptions)
     cfg = common_setup(ctx.obj)

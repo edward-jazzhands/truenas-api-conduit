@@ -203,4 +203,3 @@ class Config(BaseSettings):
         for field, value in Config.model_fields.items():
             if field not in self.provenance:
                 self.provenance[field] = "default"
-                log.debug(f"{field} was loaded from defaults")

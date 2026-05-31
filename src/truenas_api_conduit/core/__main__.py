@@ -38,6 +38,8 @@ if sys.platform != "win32":
 log_setup.init_logging()
 log = logging.getLogger(__name__)
 
+# in Aiohttp, the callback endpoint functions must always take a web.Request
+# object as the only argument.
 
 async def request_handler(request: web.Request) -> web.Response:
     "Take request in json-rpc, return response in json-rpc"
@@ -62,19 +64,42 @@ async def request_handler(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
+async def status(request: web.Request) -> web.Response:
+    "Check the status of the TrueNAS API Conduit service"
+
+    client: TrueNASClient = request.app["truenas"]
+    result = client.status()
+    return web.json_response(result)
+
+
+# in Aiohttp, the startup and cleanup hooks will always have the app instance
+# passed in to them as the first argument.
+
 async def start_truenas(app: web.Application) -> None:
 
     from truenas_api_conduit.core.ws_client import TrueNASClient
 
-    client = TrueNASClient(app["config"])  #  The client runs inside the web app
+    cfg = app["config"]
+    assert isinstance(cfg, Config)
+
+    client = TrueNASClient(cfg)  #  The client runs inside the web app
     app["truenas"] = client  
     await client.connect()  #  will handle the auth process
 
+    if os.path.exists("/tmp/truenas-api-conduit.lock"):
+        log.debug("Lockfile was not properly cleaned up after last run")
+
+    with open("/tmp/truenas-api-conduit.lock", "w") as f:
+        f.write(cfg.model_dump_json(indent=2))
 
 async def stop_truenas(app: web.Application) -> None:
 
     client: TrueNASClient = app["truenas"]
     await client.close()
+    try:
+        os.remove("/tmp/truenas-api-conduit.lock")
+    except FileNotFoundError:
+        pass
 
 
 def start():
@@ -118,8 +143,9 @@ def start():
     app = web.Application() 
     app["config"] = cfg  #   so startup hooks can access it
 
-    # HTTP endpoint for the CLI
+    # HTTP endpoints for the CLI
     app.router.add_post("/rpc", request_handler)
+    app.router.add_get("/status", status)
 
     # NOTE: The reason we want the start and stop functions to be hooks is because
     # it allows us to make them async. Notice we don't need to use asyncio.run()

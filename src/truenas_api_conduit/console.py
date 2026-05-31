@@ -2,9 +2,13 @@ from rich.console import Console
 
 MAX_WIDTH: int = 120
 
+# NOTE: I create the stderr and stdout consoles here in order to re-use them
+# across the entire program. Provides consistent formatting as well as
+# saves a tiny bit of startup time. Normally Rich-Click and the logging
+# RichHandler would both create their own consoles.
+
 console_stderr = Console(stderr=True)
 console_stdout = Console(stderr=False)
-console_stdout.__setattr__("flapjack", "flaps and jacks")
 
 # Rich does not have a built-in setting for max width. So we allow it
 # to detect the terminal size automatically, then only change it to

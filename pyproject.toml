@@ -17,6 +17,7 @@ dependencies = [
     "rich-click>=1.9.7",
     "secretstorage>=3.5.0",
     "websockets>=11.0.1",
+    "yaspin>=3.4.0",
 ]
 
 [project.scripts]
