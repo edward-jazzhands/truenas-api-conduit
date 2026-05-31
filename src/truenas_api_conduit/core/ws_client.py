@@ -13,10 +13,8 @@ import websockets.client as client
 import websockets.exceptions as ws_exceptions
 
 # project
-# from truenas_api_conduit.console import console_stderr
 from truenas_api_conduit.config import Config
 
-UPTIME_OUTPUT = Path("/tmp/uptime.txt")
 RECONNECT_DELAY: int = 10
 HEARTBEAT: int = 30
 
@@ -25,31 +23,12 @@ log = logging.getLogger(__name__)
 
 __all__ = [
     "TrueNASClient",
-    "get_common_requests",
 ]
-
-
-def get_common_requests() -> dict[str, list[Any]]:
-
-    # Server Metrics I want to collect:
-
-    #   - System uptime (days) - system.info
-    #   - CPU usage (percent)  - reporting.get_data "{"name":"cpu"}, {"start":$start,"end":$end,"aggregate":true}"
-    #   - CPU temperature (degrees C)
-    #   - RAM usage (percent)
-    #   - Disk usage (percent) - disk.query or possibly pool.query
-    #   - Network usage (bytes/s)
-    #   - Number of active alerts - alert.list
-
-    return {
-        "system.info": [],
-        "pool.query": [],
-    }
 
 
 async def _get_websocket_conn(cfg: Config) -> client.WebSocketClientProtocol:
 
-    log.info("Starting get_websocket_client")
+    log.info("Starting _get_websocket_conn")
 
     ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT) #! why TLS?
     
@@ -68,21 +47,6 @@ async def _get_websocket_conn(cfg: Config) -> client.WebSocketClientProtocol:
     return await client.connect(cfg.uri, ssl=ssl_context)
 
 
-def _write_results(msg: dict[str, Any]) -> None:
-
-    uptime = msg.get("result", {}).get("uptime")
-    if uptime is not None:
-        # Write atomically to a temp file then replace, so programs never
-        # reads a half-written file mid-update
-        tmp = UPTIME_OUTPUT.with_suffix(".tmp")
-        tmp.write_text(str(uptime) + "\n")
-        tmp.replace(UPTIME_OUTPUT)
-
-        log.debug("Uptime: %s", uptime)
-    else:
-        log.error("Unexpected response: %s", msg)
-
-
 
 class TrueNASClient:
     """wrapper around the websocket connection. This is created by the aiohttp web
@@ -90,7 +54,7 @@ class TrueNASClient:
 
     def __init__(self, config: Config) -> None:
         self.config = config
-        "pyantic-settings Config object"
+        "pydantic-settings Config object"
 
         self.ws_conn: client.WebSocketClientProtocol
         "Websocket connection client"
@@ -108,8 +72,13 @@ class TrueNASClient:
             "req_id": self.req_id,
             "ws_conn host": self.ws_conn._host,
             "ws_conn port": self.ws_conn._port,
+            "socket_port": self.config.socket_port,
             "ws_conn secure": self.ws_conn._secure,
-            "pending": len(self.pending),
+            "truenas_cert_path": self.config.truenas_cert_path,
+            "validate_certs": self.config.validate_certs,
+            "api_key": str(self.config.api_key), # str() obfuscates the key
+            "log_level": self.config.log_level,
+            "no_color": self.config.no_color,
         }
 
     def make_rpc_request(
@@ -190,6 +159,7 @@ class TrueNASClient:
     async def close(self) -> None:
         await self.ws_conn.close()
 
+    #! not used right now
     async def _reconnect(self) -> None:
         log.info("Reconnecting in %s seconds...", RECONNECT_DELAY)
         await asyncio.sleep(RECONNECT_DELAY)
@@ -201,13 +171,16 @@ class TrueNASClient:
             try:
                 await self.ws_conn.ping()
             except ws_exceptions.ConnectionClosed:
+                log.error("Heartbeat ping failed")
                 break  # reader loop will handle reconnect
+            else:
+                log.info("Heartbeat ping successful")
                     
     # NOTE: Just to refresh your brain on how this works if you're rusty, in a
     # proper websocket client architecture, the sending logic and the receiving logic 
     # are separated into two different concerns. The sending logic is the "writer"
     # and the receiving logic is the "reader". Technically, sending and receiving
-    # are two different streams, websockets just abstracts that into one interface.
+    # are two different streams, websockets just abstract that into one interface.
     # That's why we need the pending dict. __call__ just fires off the request
     # and returns a future.
 
@@ -228,7 +201,7 @@ class TrueNASClient:
         self.pending[payload["id"]] = future  # so the reader loop can find it
 
         await self.ws_conn.send(json.dumps(payload))
-        return await future
+        return await future  #! is this supposed to await the future before returning?
                 
     async def _reader_loop(self) -> None:
 
@@ -284,4 +257,4 @@ class TrueNASClient:
                 future.cancel()
             self.pending.clear()
             self.authenticated = False
-            await self._reconnect()
+

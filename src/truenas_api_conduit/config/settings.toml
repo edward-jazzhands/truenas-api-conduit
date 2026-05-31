@@ -19,13 +19,6 @@ truenas_host = "192.168.1.xxx:443"
 # or creating an environment variable called TRUENAS_API_KEY. See docs.
 # api_key = "1234567890"
 
-# WARNING: This is only intended for future-proofing, in case the API route ever 
-# changes. This must match what TrueNAS currently uses. (Default: "/api/current")
-# api_route = "/api/current"
-
-# How often to poll the TrueNAS API for updates, in seconds. (Default: 10)
-polling_interval = 10
-
 # Setting log level to info or debug is equivalent to using the --verbose flag
 # on the CLI. -v = info, -vv = debug, -vvv = trace
 # Options: [critical, error, warning, info, debug, trace]  (Default: "warning")
@@ -39,3 +32,7 @@ no_color = false
 # by the CLI to send requests to the service. It's arbitrary and you can
 # change it if you need to. (default: 4567)
 # socket_port = 4567
+
+# WARNING: This is only intended for future-proofing, in case the API route ever 
+# changes. This must match what TrueNAS currently uses. (Default: "/api/current")
+# api_route = "/api/current"

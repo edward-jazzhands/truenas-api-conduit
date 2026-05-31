@@ -109,3 +109,18 @@ def set_log_level(level: int) -> None:
         logging.getLogger().handlers = [_handlers_storage.debug]
     else:
         logging.getLogger().handlers = [_handlers_storage.normal]
+
+
+def enable_timestamps_on_normal() -> None:
+
+    if _handlers_storage is None:
+        raise RuntimeError("Logging not initialized")
+
+    if not logging.getLogger().level >= 20:
+        raise RuntimeError("Can only toggle timestamps when set to info or higher")
+
+    normal_with_time = make_rich_handler(show_time=True, show_path=False)
+    normal_with_time.addFilter(AppFilter())
+    formatter = logging.Formatter("%(message)s", datefmt="[%X]")
+    normal_with_time.setFormatter(formatter)
+    logging.getLogger().handlers = [normal_with_time]

@@ -138,7 +138,6 @@ class Config(BaseSettings):
     validate_certs: bool = True
     api_key: SecretStr | str = Field(default=..., json_schema_extra={"keyring": True})
     api_route: str = "/api/current"
-    polling_interval: int = 10
     log_level: str = "warning"
     no_color: bool = Field(default=False, validation_alias="NO_COLOR")
     socket_port: int = 4567

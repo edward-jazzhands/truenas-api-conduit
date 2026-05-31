@@ -3,6 +3,8 @@ import signal
 import sys
 import logging
 import os
+import json
+from enum import StrEnum
 from typing import Any, Callable, TYPE_CHECKING
 from dataclasses import dataclass
 
@@ -17,7 +19,7 @@ from click_didyoumean import DYMMixin
 from rich.traceback import install as tb_install
 
 # project
-from truenas_api_conduit import __version__, APP_NAME, log_setup
+from truenas_api_conduit import __version__, APP_NAME, log_setup, LOCK_FILE
 import truenas_api_conduit.core as core
 from truenas_api_conduit.console import console_stderr, console_stdout
 
@@ -73,14 +75,31 @@ class CLIOptions:
     verbose: int = 0
     no_color: bool | None = None
 
+class Endpoints(StrEnum):
 
-def common_setup(cli_options: CLIOptions) -> Config:
+    RPC = "/rpc"
+    STATUS = "/status"
+    COMMAND = "/command"
+
+
+def logging_setup(ctx: click.RichContext) -> None:
+
+    assert isinstance(ctx.obj, CLIOptions)
 
     nc_env = os.environ.get("NO_COLOR")
-    if nc_env is not None or cli_options.no_color:
+    if nc_env is not None or ctx.obj.no_color:
         console_stderr.no_color = True
 
+    if ctx.obj.verbose > 1:
+        if ctx.obj.no_color:
+            click.echo(ctx.obj)
+        else:
+            console_stderr.print(ctx.obj)
+
     log_setup.init_logging()
+
+
+def config_setup(cli_options: CLIOptions) -> Config:
 
     # Remember the root logger starts at WARNING or ERROR
     log_mapping = logging.getLevelNamesMapping()
@@ -219,6 +238,89 @@ def common_setup(cli_options: CLIOptions) -> Config:
     log.debug(cfg.provenance)
     return cfg
 
+class RequestHelper:
+
+    def __init__(
+        self,
+        port: int,
+    ) -> None:
+        self.port = port
+
+    def __call__(
+        self, endpoint: Endpoints, json_dict: dict[str, Any] | None = None
+    ) -> dict[str, Any] | str:
+        """no json = GET   
+        pass in json = POST"""
+
+        if endpoint not in Endpoints:
+            raise ValueError(f"Invalid endpoint: {endpoint}")
+
+        log.debug("Making request")
+
+        import requests
+        import yaspin
+        from yaspin.spinners import Spinners
+
+        try:
+            with yaspin.yaspin(Spinners.bouncingBall, text="Sending request..."):
+                if json_dict:
+                    response = requests.post(
+                        f"http://127.0.0.1:{self.port}{endpoint}",
+                        json=json_dict
+                    )
+                else:
+                    response = requests.get(
+                        f"http://127.0.0.1:{self.port}{endpoint}"
+                    )
+        except requests.exceptions.ConnectionError as e:
+            log.error("Could not connect to TrueNAS API Conduit service")
+            sys.exit(1)
+        except Exception as e:
+            log.error("Unexpected error making request: %s", e)
+            sys.exit(1)
+        
+        try:
+            return response.json()
+        except json.JSONDecodeError as e:
+            log.error("Malformed response: %s | Raw response: %s", e, response.text)
+            return response.text
+
+
+def get_service_status() -> int:
+
+    try:
+        with open(LOCK_FILE, "r") as f:
+            lock_dict = json.loads(f.read())
+        assert isinstance(lock_dict, dict)
+        assert isinstance(lock_dict["pid"], int)
+        assert isinstance(lock_dict["socket_port"], int)
+    except FileNotFoundError:
+        log.error("Lock file not found")
+        raise
+    except (json.JSONDecodeError, AssertionError) as e:
+        log.error(f"Malformed lock file: {e}")
+        sys.exit(1)
+    except Exception as e:
+        log.error(f"Unexpected error reading lock file: {e}")
+        sys.exit(1)
+        
+
+    if lock_dict["pid"] <= 0:
+        return False
+
+    try:
+        os.kill(lock_dict["pid"], 0)
+        return lock_dict["socket_port"]
+    except PermissionError:
+        # process exists, but we can't signal it
+        return lock_dict["socket_port"]
+    except ProcessLookupError:
+        log.error("TrueNAS API Conduit is not running (Note: lock file is stale)")
+        sys.exit(1)
+    except Exception as e:
+        log.error(f"Unexpected error checking service status: {e}")
+        sys.exit(1)
+
 
 # === Click Option Callbacks ===
 
@@ -262,18 +364,6 @@ def set_no_color_param(ctx: click.Context, param: click.Parameter, value: bool) 
         ctx.obj.no_color = value
     return value
 
-# MAIN COMMAND OPTIONS
-
-def set_truenas_host_param(ctx: click.Context, param: click.Parameter, value: str) -> str:
-    ctx.ensure_object(CLIOptions)
-    ctx.obj.truenas_host = value
-    return value
-
-def set_key_param(ctx: click.Context, param: click.Parameter, value: str) -> str:
-    ctx.ensure_object(CLIOptions)
-    ctx.obj.api_key = value
-    return value
-
 
 def common_options(f: Callable) -> Callable:
     f = click.option(
@@ -303,36 +393,6 @@ def common_options(f: Callable) -> Callable:
     # returned by click.option.
 
 
-def main_commands_options(f: Callable) -> Callable:
-    f = click.option(
-        "--api-key",
-        callback=set_key_param,
-        is_flag=True,
-        default=None,
-        expose_value=False,
-        help=api_key_help,
-    )(f)
-    f = click.option(
-        "--truenas-host",
-        callback=set_truenas_host_param,
-        expose_value=False,
-        help=truenas_host_help,
-    )(f)
-    return f
-
-
-
-truenas_host_help = f"""The address that you use to access the TrueNAS Web UI over
-HTTPS. You can also set the [{MENU_COLORS['envvar']}]truenas_host[/{MENU_COLORS['envvar']}]
-field in the config file, or set an environment variable named
-[{MENU_COLORS['envvar']}]TRUENAS_HOST[/{MENU_COLORS['envvar']}]"""
-
-api_key_help = f"""Ask to be prompted for your TrueNAS API key. You can also use the
-[{MENU_COLORS['command']}]set-key[/{MENU_COLORS['command']}] command (recommended),
-set an environment variable named
-[{MENU_COLORS['envvar']}]TRUENAS_API_KEY[/{MENU_COLORS['envvar']}], or set the
-[{MENU_COLORS['envvar']}]api_key[/{MENU_COLORS['envvar']}] field in the config file"""
-
 verbose_help = f"""Sets the verbosity/logging level.
 [{MENU_COLORS['option']}]-v[/{MENU_COLORS['option']}] for info,
 [{MENU_COLORS['option']}]-vv[/{MENU_COLORS['option']}] for debug,
@@ -341,7 +401,6 @@ verbose_help = f"""Sets the verbosity/logging level.
 no_color_help = f"""Disables color output. You can also set the
 [{MENU_COLORS['envvar']}]NO_COLOR[/{MENU_COLORS['envvar']}] environment variable to fully
 disable color including the help menu"""
-
 
 
 # NOTE: When using click.group() as the main command, it will automatically show
@@ -391,6 +450,8 @@ def cli(ctx: click.RichContext) -> None:
     re-use the same connection. It can be installed as a service, or run as a
     standalone program without installing"""
 
+    ctx.ensure_object(CLIOptions)
+
     # NOTE: having the common_options decorator on the main group means those 
     # options are visible in the main help menu which is important for UX. It
     # also means a user can apply a global option to the main command
@@ -405,11 +466,71 @@ def cli(ctx: click.RichContext) -> None:
     # each command. Rich-Click helps a lot for making this look nice with
     # the command_panel decorators (above).
 
-    # But we do not want to run the common_setop function here, because it
-    # does the full initialization of the config and logging. Some commands
-    # do not require this.
+    # However, the setup functions (logging_setup, config_setup) cannot be
+    # run here, because they would not catch options that were passed into
+    # the subcommands. If global options are set on the main command, they'll
+    # be passed through so that the subcommand setup gets the full context.
 
 
+start_help = f"""Tell your OS to start the conduit service. You can also
+start the program directly as a standalone program without installing by using the
+[{MENU_COLORS['option']}]--standalone[/{MENU_COLORS['option']}] option, which runs in
+the foreground by default. Tip: to run standalone in the background, use:
+[{MENU_COLORS['command']}]truenas-api start & disown[/{MENU_COLORS['command']}]
+(Mac + Linux) or
+[{MENU_COLORS['command']}]Start-Process truenas-api start[/{MENU_COLORS['command']}]
+(Windows)"""
+
+standalone_help = """Starts the service as a standalone program in the foreground (not
+run by your service manager). Does not require installation"""
+
+api_key_help = f"""Ask to be prompted for your TrueNAS API key. You can also use the
+[{MENU_COLORS['command']}]set-key[/{MENU_COLORS['command']}] command (recommended),
+set an environment variable named
+[{MENU_COLORS['envvar']}]TRUENAS_API_KEY[/{MENU_COLORS['envvar']}], or set the
+[{MENU_COLORS['envvar']}]api_key[/{MENU_COLORS['envvar']}] field in the config file"""
+
+truenas_host_help = f"""The address that you use to access the TrueNAS Web UI over
+HTTPS. You can also set the [{MENU_COLORS['envvar']}]truenas_host[/{MENU_COLORS['envvar']}]
+field in the config file, or set an environment variable named
+[{MENU_COLORS['envvar']}]TRUENAS_HOST[/{MENU_COLORS['envvar']}]"""
+
+
+@cli.command(help=start_help)
+@click.option("--standalone", is_flag=True, default=False, help=standalone_help)
+@click.option("--api-key", is_flag=True, default=None, help=api_key_help)
+@click.option("--truenas-host", help=truenas_host_help)
+@common_options
+@click.pass_context
+def start(
+    ctx: click.RichContext, 
+    standalone: bool,
+    api_key: bool | None = None,
+    truenas_host: str | None = None,
+) -> None:
+
+    logging_setup(ctx)
+    assert ctx.console is not None
+
+    ctx.obj.api_key = api_key
+    ctx.obj.truenas_host = truenas_host
+    cfg = config_setup(ctx.obj)
+
+    if standalone:
+        log.info("Starting service in foreground")
+
+        os.environ["TAC_CONFIG"] = cfg.model_dump_json()
+        dname = "truenas-api-conduitd"
+        os.execvp(dname, [dname])
+
+    else:
+        log.info("Telling OS to start the service")
+        # from truenas_api_conduit.service import get_service_manager
+        # from truenas_api_conduit.core import PLATFORM
+        # service = get_service_manager(PLATFORM)
+
+        # service.start(cfg)
+        
 system_help = """Installs the service as a system service. This requires elevation"""
 package_help = """This is intended to be used by package managers"""
 
@@ -433,8 +554,8 @@ def install(
     if system and package:
         raise click.UsageError("You cannot specify both --system and --package")
 
-    assert isinstance(ctx.obj, CLIOptions)
-    cfg = common_setup(ctx.obj)
+    logging_setup(ctx)
+    assert ctx.console is not None
 
     from truenas_api_conduit.service import get_service_manager
     from truenas_api_conduit.core import PLATFORM, InstallType
@@ -454,51 +575,10 @@ def install(
 @click.pass_context
 def uninstall(ctx: click.RichContext) -> None:
     """Uninstall the conduit service"""
-    pass
 
+    logging_setup(ctx)
+    assert ctx.console is not None
 
-foreground_help = """Starts the service as a standalone program in the foreground (not
-run by your service manager). Does not require installation"""
-
-start_help = f"""Tell your OS to start the conduit service. You can also
-start the program directly as a standalone program without installing by using the
-[{MENU_COLORS['option']}]--standalone[/{MENU_COLORS['option']}] option, which runs in
-the foreground by default. Tip: to run standalone in the background, use:
-[{MENU_COLORS['command']}]truenas-api start & disown[/{MENU_COLORS['command']}]
-(Mac + Linux) or
-[{MENU_COLORS['command']}]Start-Process truenas-api start[/{MENU_COLORS['command']}]
-(Windows)"""
-
-@cli.command(help=start_help)
-@click.option("--standalone", is_flag=True, default=False, help=foreground_help)
-@main_commands_options
-@common_options
-@click.pass_context
-def start(ctx: click.RichContext, standalone: bool) -> None:
-
-    if ctx.obj.verbose > 1:
-        if ctx.obj.no_color:
-            click.echo(ctx.obj)
-        else:
-            console_stderr.print(ctx.obj)
-
-    assert isinstance(ctx.obj, CLIOptions)
-    cfg = common_setup(ctx.obj)
-
-    if standalone:
-        log.info("Starting service in foreground")
-
-        os.environ["TAC_CONFIG"] = cfg.model_dump_json()
-        dname = "truenas-api-conduitd"
-        os.execvp(dname, [dname])
-
-    else:
-        log.info("Telling OS to start the service")
-        # from truenas_api_conduit.service import get_service_manager
-        # from truenas_api_conduit.core import PLATFORM
-        # service = get_service_manager(PLATFORM)
-
-        # service.start(cfg)
 
 request_help = f"""Make a request using the service. The service must be running.\n
 Example: [{MENU_COLORS['command']}]truenas-api request system.info[/{MENU_COLORS['command']}]
@@ -507,7 +587,6 @@ Example: [{MENU_COLORS['command']}]truenas-api request system.info[/{MENU_COLORS
 @cli.command(help=request_help)
 @click.argument("method", help="The method to call (ex: system.info)", required=True)
 @click.option("--params", "-p", help="The params to pass to the method")
-@main_commands_options
 @common_options
 @click.pass_context
 def request(
@@ -516,14 +595,17 @@ def request(
     params: str | None = None,
 ) -> None:
     
-    assert isinstance(ctx.obj, CLIOptions)
+    logging_setup(ctx)
     assert ctx.console is not None
-    cfg = common_setup(ctx.obj)
-
-    log.debug("Making request")
-    import requests
-    import json
-    import yaspin
+    
+    try:
+        socket_port = get_service_status()
+    except FileNotFoundError:
+        log.info("No lock file found, getting port from user config")
+        cfg = config_setup(ctx.obj)
+        socket_port = cfg.socket_port
+    
+    request_helper = RequestHelper(socket_port)
 
     params_list: list[Any] = []
     if params:
@@ -533,12 +615,11 @@ def request(
         except json.JSONDecodeError as e:
             raise click.UsageError(f"Malformed params: {e}")
 
-    with yaspin.yaspin(text="Sending request..."):
-        response = requests.post(
-            f"http://127.0.0.1:{cfg.socket_port}/rpc",
-            json={"method": method, "params": params_list}
-        )
-    ctx.console.print(response.json())
+    response = request_helper(
+        Endpoints.RPC,
+        {"method": method, "params": params_list}
+    )
+    ctx.console.print(response)
 
 
 @cli.command()
@@ -546,7 +627,20 @@ def request(
 @click.pass_context
 def stop(ctx: click.RichContext) -> None:
     """Stop the conduit service"""
-    pass
+
+    logging_setup(ctx)
+    assert ctx.console is not None
+
+    try:
+        socket_port = get_service_status()
+    except FileNotFoundError:
+        log.info("No lock file found, getting port from user config")
+        cfg = config_setup(ctx.obj)
+        socket_port = cfg.socket_port
+    
+    request_helper = RequestHelper(socket_port)
+    response = request_helper(Endpoints.COMMAND, {"command": "stop"})
+    ctx.console.print(response)
 
 
 @cli.command()
@@ -554,7 +648,20 @@ def stop(ctx: click.RichContext) -> None:
 @click.pass_context
 def restart(ctx: click.RichContext) -> None:
     """Restart the conduit service"""
-    pass
+
+    logging_setup(ctx)
+    assert ctx.console is not None
+
+    try:
+        socket_port = get_service_status()
+    except FileNotFoundError:
+        log.info("No lock file found, getting port from user config")
+        cfg = config_setup(ctx.obj)
+        socket_port = cfg.socket_port
+    
+    request_helper = RequestHelper(socket_port)
+    response = request_helper(Endpoints.COMMAND, {"command": "restart"})
+    ctx.console.print(response)
 
 
 @cli.command()
@@ -563,15 +670,23 @@ def restart(ctx: click.RichContext) -> None:
 def status(ctx: click.RichContext) -> None:
     """Check the status of the conduit service"""
 
-    assert isinstance(ctx.obj, CLIOptions)
+    logging_setup(ctx)
     assert ctx.console is not None
-    cfg = common_setup(ctx.obj)
 
-    log.debug("Making request")
-    import requests
-
-    response = requests.post(f"http://127.0.0.1:{cfg.socket_port}/status")
-    click.echo(response.json())
+    no_lock_found = False
+    try:
+        socket_port = get_service_status()
+    except FileNotFoundError:
+        log.info("No lock file found, getting port from user config")
+        no_lock_found = True
+        cfg = config_setup(ctx.obj)
+        socket_port = cfg.socket_port
+    
+    request_helper = RequestHelper(socket_port)
+    response = request_helper(Endpoints.STATUS)
+    ctx.console.print(response)
+    if no_lock_found:
+        log.warning("The request worked, despite the lock file not being found")
 
 
 @cli.command()
@@ -580,6 +695,8 @@ def status(ctx: click.RichContext) -> None:
 def set_key(ctx: click.RichContext) -> None:
     """Sets the API key using whatever compatible keyring/secrets manager is
     available on your system"""
+
+    logging_setup(ctx)
 
     log.debug("Setting API key")
     import keyring
@@ -594,6 +711,8 @@ config_help = f"""Attempts to open the config file in your editor, if
 @click.pass_context
 def config(ctx: click.RichContext) -> None:
     
+    logging_setup(ctx)
+    
     editor = os.environ.get("EDITOR")
     if not editor:
         raise click.UsageError("No editor set. Set the $EDITOR environment variable")
@@ -606,7 +725,10 @@ def config(ctx: click.RichContext) -> None:
 def config_path(ctx: click.RichContext) -> None:
     """Prints the path to the config file"""
 
-    click.echo(core.CONFIG_PATH)  # stays clean/pure for piping
+    logging_setup(ctx)
+    assert ctx.console is not None
+
+    ctx.console.print(core.CONFIG_PATH)  # stdout for piping
     console_stderr.print(f"Created already?: {core.CONFIG_PATH.exists()}")
     console_stderr.print(
         f"[italic]Tip: You can pipe this command into an editor:[/italic]"
@@ -620,15 +742,30 @@ def config_path(ctx: click.RichContext) -> None:
 @click.pass_context
 def print_config(ctx: click.RichContext) -> None:
     """Validates and outputs your current configuration as JSON to stdout.
-    Logging/debug is separated out to stderr"""
+    This can be saved and passed in to the service's stdin to start it.
+    Logging/debug is separated out to stderr. Warning: This will output
+    your full API key in plain text"""
 
-    assert isinstance(ctx.obj, CLIOptions)
-    cfg = common_setup(ctx.obj)
-
+    logging_setup(ctx)
+    assert ctx.console is not None
+    
+    cfg = config_setup(ctx.obj)
     json_dict = cfg.model_dump_json(indent=2)
-    click.echo(json_dict)
+    
+    ctx.console.print(json_dict)
     if ctx.obj.verbose == 0:
         console_stderr.print(
-            f"\n[italic]Tip: You can increase the verbosity to see provenance[/italic]",
+            f"\n[italic]Tip: set verbosity/logging to debug to see provenance[/italic]",
             markup=True,
         )
+
+@cli.command()
+@common_options
+@click.pass_context
+def version(ctx: click.RichContext) -> None:
+    """Prints the version of the TrueNAS API Conduit service"""
+
+    logging_setup(ctx)
+    assert ctx.console is not None
+    
+    ctx.console.print(f"{APP_NAME} version {__version__}")
