@@ -13,10 +13,9 @@ if TYPE_CHECKING:
 # third-party
 from rich.panel import Panel
 import rich_click as click
-import psutil
 
 # project
-from truenas_api_conduit import APP_NAME, LOCK_FILE, log_setup
+from truenas_api_conduit import log_setup
 import truenas_api_conduit.core as core
 from truenas_api_conduit.console import console_stderr
 
@@ -26,9 +25,8 @@ __all__ = [
     "CLIOptions",
     "logging_setup",
     "config_setup",
-    "RequestHelper",
-    "get_request_helper",
 ]
+
 
 @dataclass
 class CLIOptions:
@@ -44,7 +42,6 @@ class CLIOptions:
     truenas_host: str | None = None
     verbose: int = 0
     no_color: bool | None = None
-
 
 
 def logging_setup(ctx: click.RichContext) -> None:
@@ -125,7 +122,7 @@ def config_setup(cli_options: CLIOptions) -> Config:
         )
         sys.exit(1)
     except tomllib.TOMLDecodeError as e:
-        toml_decoding_error_panel(e)
+        _toml_decoding_error_panel(e)
         sys.exit(1)
     except Exception as e:
         if log_level <= log_mapping["TRACE"]:
@@ -154,258 +151,50 @@ def config_setup(cli_options: CLIOptions) -> Config:
     return cfg
 
 
-def toml_decoding_error_panel(e: tomllib.TOMLDecodeError) -> None:
+def _toml_decoding_error_panel(e: tomllib.TOMLDecodeError) -> None:
 
-        err_string = (
-            "[default]Your config file could not be parsed due to a TOML syntax error "
-            f"at line {e.lineno}:\n\n"
-        )
-        doc_split = e.doc.splitlines()
-        relevant_lines = doc_split[e.lineno - 3 : e.lineno + 2]
+    err_string = (
+        "[default]Your config file could not be parsed due to a TOML syntax error "
+        f"at line {e.lineno}:\n\n"
+    )
+    doc_split = e.doc.splitlines()
+    relevant_lines = doc_split[e.lineno - 3 : e.lineno + 2]
 
-        for i, line in enumerate(relevant_lines):
-            current_line = (e.lineno - 2) + i
-            is_bad_line = False
+    for i, line in enumerate(relevant_lines):
+        current_line = (e.lineno - 2) + i
+        is_bad_line = False
 
-            if current_line == e.lineno:
-                is_bad_line = True
-                err_string += f">>> "
-            else:
-                err_string += f"    "
-            if current_line <= 9:
-                err_string += " "
-
-            err_string += f"{current_line} | "
-
-            if line.strip().startswith("#"):
-                err_string += f"[gray50]{line}[/gray50]\n"
-            elif is_bad_line:
-                err_string += f"[bright_yellow]{line}[/bright_yellow]\n"
-            else:
-                err_string += f"{line}\n"
-
-        # Error help/suggestions
-
-        bad_line = doc_split[e.lineno - 1]
-        for word in ["True", "False"]:
-            if word in bad_line:
-                err_string += f"\nYou used '{word}' with a capital {word[0]}. "
-                err_string += f"This must be lowercase like '{word.lower()}'.\n"
-        if bad_line.count('"') == 1:
-            err_string += f'\nOnly found one doublequote(") mark in the line. '
-            err_string += f"Did you forget to close it?\n"
-        if bad_line.count("'") == 1:
-            err_string += f"\nOnly found one singlequote(') mark in the line. "
-            err_string += f"Did you forget to close it?\n"
-        if bad_line.count("'") == 0 and bad_line.count('"') == 0:
-            err_string += "\nTip: does it need to be enclosed in quotes?\n"
-
-        console_stderr.print(Panel(err_string, style="red"))
-
-
-class RequestHelper:
-
-    def __init__(
-        self,
-        port: int,
-    ) -> None:
-        self.port = port
-
-    def __call__(
-        self, endpoint: core.Endpoints, json_dict: dict[str, Any] | None = None
-    ) -> dict[str, Any] | str:
-        """no json = GET
-        pass in json = POST"""
-
-        if endpoint not in core.Endpoints:
-            raise ValueError(f"Invalid endpoint: {endpoint}")
-
-        log.debug("Making request")
-
-        import requests
-        import yaspin
-        from yaspin.spinners import Spinners
-
-        try:
-            with yaspin.yaspin(Spinners.bouncingBall, text="Sending request..."):
-                if json_dict is not None:
-                    response = requests.post(
-                        f"http://127.0.0.1:{self.port}{endpoint}", json=json_dict
-                    )
-                else:
-                    response = requests.get(f"http://127.0.0.1:{self.port}{endpoint}")
-        except requests.exceptions.ConnectionError as e:
-            log.error("Could not connect to TrueNAS API Conduit service")
-            sys.exit(1)
-        except Exception as e:
-            log.error("Unexpected error making request: %s", e)
-            sys.exit(1)
-
-        try:
-            return response.json()
-        except json.JSONDecodeError as e:
-            log.error("Malformed response: %s | Raw response: %s", e, response.text)
-            return response.text
-
-
-def auto_find_service_port() -> int | None:
-
-    log.debug("Auto-finding service port")
-
-    service_proc: psutil.Process | None = None
-    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
-        try:
-            cmdline = proc.info["cmdline"] or []
-            if APP_NAME in " ".join(cmdline):
-                service_proc = proc
-                break
-        except psutil.NoSuchProcess, psutil.AccessDenied:
-            continue
-
-    if service_proc:
-        log.debug("Found service with name: %s", service_proc.name())
-
-        if port := get_process_port(service_proc):
-            log.debug("Auto-found the service port: %s", port)
-            return port
+        if current_line == e.lineno:
+            is_bad_line = True
+            err_string += f">>> "
         else:
-            log.critical("The process is running, but does not have a port open")
-    else:
-        return  # ~ This tells us the process is definitely not running
+            err_string += f"    "
+        if current_line <= 9:
+            err_string += " "
 
+        err_string += f"{current_line} | "
 
-def get_process_by_pid(pid: int) -> psutil.Process | None:
-
-    try:
-        return psutil.Process(pid)
-    except psutil.NoSuchProcess, psutil.AccessDenied:
-        return None
-
-
-def get_process_port(proc: psutil.Process) -> int | None:
-
-    try:
-        connections = proc.net_connections()
-        for conn in connections:
-            if conn.status == "LISTEN":
-                return conn.laddr.port
-    except psutil.NoSuchProcess, psutil.AccessDenied:
-        log.warning("Could not get process port: %s", proc)
-        return None
-
-
-def get_process_name(proc: psutil.Process) -> str | None:
-
-    try:
-        return proc.name()
-    except psutil.NoSuchProcess, psutil.AccessDenied:
-        return None
-
-
-def send_os_signal(pid: int, sig: int = 0) -> bool:
-
-    try:
-        os.kill(pid, sig)
-        return True
-    except PermissionError:
-        # process exists, but we can't signal it, which is fine. probably
-        # just because its owned by root or some other user. Should still work.
-        return True
-    except ProcessLookupError:
-        log.warning("Could not signal service process with PID: %s", pid)
-        return False
-    except Exception as e:
-        log.error("Unexpected error checking service status: %s", e)
-        return False
-
-
-def read_lockfile() -> dict[str, Any] | None:
-
-    try:
-        with open(LOCK_FILE, "r") as f:
-            lock_dict = json.loads(f.read())
-        assert isinstance(lock_dict, dict)
-        assert isinstance(lock_dict["pid"], int)
-        assert isinstance(lock_dict["socket_port"], int)
-        return lock_dict
-    except FileNotFoundError:
-        log.info("Did not find a lock file")
-        return
-    except (json.JSONDecodeError, AssertionError) as e:
-        log.error("Malformed lock file: %s", e)
-        return
-    except Exception as e:
-        log.error("Unexpected error reading lock file: %s", e)
-        return
-
-
-def check_service_status() -> int | None:
-    "If the service is up, return the port. If not, return None"
-
-    # we check if we can pull everything from the lockfile first, its faster.
-    if lock_dict := read_lockfile():
-        log.debug("Found lockfile with PID: %s", lock_dict["pid"])
-
-        if proc := get_process_by_pid(lock_dict["pid"]):
-            # if we find a process with this PID, we can't immediately trust it,
-            # we gotta make sure the PID was not recycled
-
-            log.debug("Found process with PID: %s", lock_dict["pid"])
-
-            # 1st check: does the port match the one in the lockfile
-            if proc_port := get_process_port(proc):
-                log.debug("Found process port: %s", proc_port)
-                if proc_port == lock_dict["socket_port"]:
-                    # If we look up the PID from the lockfile and the port on that process
-                    # matches the port in the lockfile, it's definitely the right process.
-                    log.debug("Process port matches lockfile, must be the right process")
-                    return proc_port
-                else:
-                    log.warning(
-                        "Process port (%s) does not match lockfile port (%s)",
-                        proc_port,
-                        lock_dict["socket_port"],
-                    )
-                    return auto_find_service_port()
-            else:
-                log.warning("Could not get process port. Trying next check...")
-
-            # 2nd check: does the process name match the app name
-            if proc_name := get_process_name(proc):  #      we got the name
-                log.debug("Found process at PID %s with name %s", lock_dict["pid"], proc_name)
-                if APP_NAME in proc_name:  #                ...and the name matches
-                    log.debug("Name matches, checking signal")
-                    if not send_os_signal(lock_dict["pid"]):
-                        log.warning(
-                            "Found process with PID %s, but could not signal it",
-                            lock_dict["pid"],
-                        )
-                    return lock_dict["socket_port"]
-                else:
-                    log.warning(
-                        "Found process with PID %s, but its name (%s) does not match. "
-                        "This means the lock file is stale and the PID was recycled.",
-                        lock_dict["pid"],
-                        proc_name,
-                    )
-                    return auto_find_service_port()
-            else:
-                # process exists, but we can't get its name. Might be fine, might not.
-                # this will probably vary depending on user permissions. This is tricky
-                # cause it might be ok, so we don't want to trigger the full auto-find yet.
-                log.info("Process name is not available for PID: %s", lock_dict["pid"])
-                return lock_dict["socket_port"]
+        if line.strip().startswith("#"):
+            err_string += f"[gray50]{line}[/gray50]\n"
+        elif is_bad_line:
+            err_string += f"[bright_yellow]{line}[/bright_yellow]\n"
         else:
-            # no service process found with this PID. Lock file must be stale
-            log.warning("Lock file is stale: PID %s not found", lock_dict["pid"])
-            return auto_find_service_port()
-    else:
-        # if the lockfile doesn't exist or is malformed, use the auto-finder
-        return auto_find_service_port()
+            err_string += f"{line}\n"
 
+    # Error help/suggestions
 
-def get_request_helper() -> RequestHelper | None:
-    "if service is up, returns a RequestHelper. If not, returns None"
+    bad_line = doc_split[e.lineno - 1]
+    for word in ["True", "False"]:
+        if word in bad_line:
+            err_string += f"\nYou used '{word}' with a capital {word[0]}. "
+            err_string += f"This must be lowercase like '{word.lower()}'.\n"
+    if bad_line.count('"') == 1:
+        err_string += f'\nOnly found one doublequote(") mark in the line. '
+        err_string += f"Did you forget to close it?\n"
+    if bad_line.count("'") == 1:
+        err_string += f"\nOnly found one singlequote(') mark in the line. "
+        err_string += f"Did you forget to close it?\n"
+    if bad_line.count("'") == 0 and bad_line.count('"') == 0:
+        err_string += "\nTip: does it need to be enclosed in quotes?\n"
 
-    if service_port := check_service_status():
-        return RequestHelper(service_port)
+    console_stderr.print(Panel(err_string, style="red"))

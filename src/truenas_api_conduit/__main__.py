@@ -4,31 +4,23 @@ import sys
 import logging
 import os
 import json
-from enum import StrEnum
 from typing import Any, Callable, TYPE_CHECKING
-from dataclasses import dataclass
 
 if TYPE_CHECKING:
-    import psutil
     from truenas_api_conduit.config.user_config import Config
+    from truenas_api_conduit.request_helper import RequestHelper
 
 # third-party
-from rich.panel import Panel
 import rich_click as click
 from click_didyoumean import DYMMixin
 from rich.traceback import install as tb_install
 
 # project
-from truenas_api_conduit import __version__, APP_NAME, log_setup
+from truenas_api_conduit import __version__, APP_NAME
 import truenas_api_conduit.core as core
 from truenas_api_conduit.console import console_stderr, console_stdout
-from truenas_api_conduit.cli_helpers import (
-    CLIOptions,
-    logging_setup,
-    config_setup,
-    RequestHelper,
-    get_request_helper,
-)
+from truenas_api_conduit.cli_helpers import CLIOptions, logging_setup, config_setup
+from truenas_api_conduit.request_helper import get_request_helper
 
 # rich tracebacks
 tb_install(console=console_stderr, show_locals=False)
@@ -222,10 +214,10 @@ start_help = f"""Tell your OS to start the conduit service. You can also
 start the program directly as a standalone program without installing by using the
 [{MENU_COLORS['option']}]--standalone[/{MENU_COLORS['option']}] option, which runs in
 the foreground by default. Tip: to run standalone in the background, use:
-[{MENU_COLORS['command']}]truenas-api start & disown[/{MENU_COLORS['command']}]
+[{MENU_COLORS['command']}]truenas-api start --standalone & disown[/{MENU_COLORS['command']}]
 (Mac + Linux) or
-[{MENU_COLORS['command']}]Start-Process truenas-api start[/{MENU_COLORS['command']}]
-(Windows)"""
+[{MENU_COLORS['command']}]Start-Process truenas-api start
+--standalone[/{MENU_COLORS['command']}] (Windows)"""
 
 standalone_help = """Starts the service as a standalone program in the foreground (not
 run by your service manager). Does not require installation"""
@@ -418,7 +410,6 @@ def status(ctx: click.RichContext) -> None:
 
     response = request_helper(core.Endpoints.STATUS)
     ctx.console.print(response)
-
 
 
 @cli.command()
