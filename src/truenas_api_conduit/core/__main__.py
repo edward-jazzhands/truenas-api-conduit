@@ -21,15 +21,10 @@ from aiohttp import web
 from aiohttp.web_runner import GracefulExit
 
 # project
-from truenas_api_conduit import LOCK_FILE
+from truenas_api_conduit import LOCK_FILE, APP_NAME
 from truenas_api_conduit.console import console_stderr
 import truenas_api_conduit.log_setup as log_setup
 from truenas_api_conduit.config import Config
-
-
-class Command(StrEnum):
-    STOP = "stop"
-    RESTART = "restart"
 
 
 def handle_exit(*_):
@@ -48,8 +43,10 @@ if sys.platform != "win32":
 log_setup.init_logging()
 log = logging.getLogger(__name__)
 
+
 # in Aiohttp, the callback endpoint functions must always take a web.Request
 # object as the only argument.
+
 
 async def request_handler(request: web.Request) -> web.Response:
     "Take request in json-rpc, return response in json-rpc"
@@ -85,46 +82,36 @@ async def status(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
-async def command(request: web.Request) -> web.Response:
-    "Run a command on the TrueNAS API Conduit service"
+async def shutdown(request: web.Request) -> web.Response:
 
-    try:
-        payload = await request.json()  # JSON-RPC payload
-    except json.JSONDecodeError as e:
-        log.error("Malformed request, skipping: %s", e)
-        return web.json_response({"error": "Malformed request"}, status=400)
+    log.info("Shutdown command received")
 
-    log.info("Command received: %s", payload)
-    command = payload["command"]
+    async def _shutdown() -> None:
+        await asyncio.sleep(0.2)
+        raise GracefulExit()
 
-    client: TrueNASClient = request.app["truenas"]
-    if command == Command.STOP:
+    asyncio.ensure_future(_shutdown())
+    return web.json_response({"result": "Shutting down"})
 
-        async def _shutdown() -> None:
-            await asyncio.sleep(0.2)
-            raise GracefulExit()
 
-        asyncio.ensure_future(_shutdown())
-        return web.json_response({"result": "Shutting down"})
+async def restart(request: web.Request) -> web.Response:
 
-    elif command == Command.RESTART:
-        async def _restart() -> None:
-            await asyncio.sleep(0.2)
-            await request.app.cleanup()
-            os.environ["TAC_CONFIG"] = request.app["config"].model_dump_json()
-            dname = "truenas-api-conduitd"
-            os.execvp(dname, [dname])
+    log.info("Restart command received")
 
-        asyncio.ensure_future(_restart())
-        return web.json_response({"result": "Restarting"})
+    async def _restart() -> None:
+        await asyncio.sleep(0.2)
+        await request.app.cleanup()
+        os.environ["TAC_CONFIG"] = request.app["config"].model_dump_json()
+        dname = APP_NAME + "d"  # ex: my-appd
+        os.execvp(dname, [dname])
 
-    else:
-        log.error("Unknown command: %s", command)
-        return web.json_response({"error": "Unknown command"}, status=400)
+    asyncio.ensure_future(_restart())
+    return web.json_response({"result": "Restarting"})
 
 
 # in Aiohttp, the startup and cleanup hooks will always have the app instance
 # passed in to them as the first argument.
+
 
 async def start_truenas(app: web.Application) -> None:
 
@@ -137,7 +124,7 @@ async def start_truenas(app: web.Application) -> None:
 
     log.info("Starting TrueNAS API websocket client")
     client = TrueNASClient(cfg)  #  The client runs inside the web app
-    app["truenas"] = client  
+    app["truenas"] = client
     await client.connect()  #  will handle the auth process
 
     if os.path.exists(LOCK_FILE):
@@ -150,6 +137,7 @@ async def start_truenas(app: web.Application) -> None:
 
     with open(LOCK_FILE, "w") as f:
         f.write(json.dumps(cfg_dict, indent=2))
+
 
 async def stop_truenas(app: web.Application) -> None:
 
@@ -171,18 +159,15 @@ async def main(cfg: Config) -> None:
     # HTTP endpoints for the CLI
     app.router.add_post("/rpc", request_handler)
     app.router.add_get("/status", status)
-    app.router.add_post("/command", command)
+    app.router.add_post("/shutdown", shutdown)
+    app.router.add_post("/restart", restart)
 
-    app.on_startup.append(start_truenas) # sets up websocket client
+    app.on_startup.append(start_truenas)  # sets up websocket client
     app.on_cleanup.append(stop_truenas)  # closes websocket client
 
     runner = web.AppRunner(app)
     await runner.setup()  # fires on_startup
-    site = web.TCPSite(
-        runner, 
-        host="127.0.0.1", 
-        port=cfg.socket_port
-    )
+    site = web.TCPSite(runner, host="127.0.0.1", port=cfg.socket_port)
     await site.start()
 
     # NOTE: address is hard-coded to localhost because this is a system service
@@ -193,7 +178,7 @@ async def main(cfg: Config) -> None:
     except GracefulExit:
         pass
     finally:
-        await runner.cleanup() 
+        await runner.cleanup()
 
 
 def start():

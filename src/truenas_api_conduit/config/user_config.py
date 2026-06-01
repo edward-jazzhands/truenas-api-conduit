@@ -146,7 +146,7 @@ class Config(BaseSettings):
     # https://pydantic.dev/docs/validation/latest/concepts/fields/#the-computed_field-decorator
 
     # Internal settings
-    
+
     @property
     def uri(self) -> str:
         return f"wss://{self.truenas_host}{self.api_route}"

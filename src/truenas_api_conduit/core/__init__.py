@@ -5,12 +5,13 @@ from pathlib import Path
 from truenas_api_conduit import APP_NAME
 from .detect_platform import detect
 from .setup_app_dir import ensure_config as _ensure_config
-from .global_enums import Platform, InstallType
+from .global_enums import Platform, InstallType, Endpoints
 
 __all__ = [
     "ensure_config",
     "Platform",
     "InstallType",
+    "Endpoints",
     "PLATFORM",
     "CONFIG_DIR",
     "CONFIG_PATH",

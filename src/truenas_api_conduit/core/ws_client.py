@@ -30,14 +30,16 @@ async def _get_websocket_conn(cfg: Config) -> client.WebSocketClientProtocol:
 
     log.info("Starting _get_websocket_conn")
 
-    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT) #! why TLS?
-    
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)  #! why TLS?
+
     if cfg.validate_certs and cfg.truenas_cert_path:
         cert_path_obj = Path(cfg.truenas_cert_path)
         ssl_context.load_verify_locations(cafile=cert_path_obj)
         log.debug("Loaded certificate for validation")
     elif cfg.validate_certs:
-        log.debug("Validate certs but no cert provided, the cert must be from a trusted CA")
+        log.debug(
+            "Validate certs but no cert provided, the cert must be from a trusted CA"
+        )
         pass
     else:
         ssl_context.check_hostname = False  # must disable this first
@@ -45,7 +47,6 @@ async def _get_websocket_conn(cfg: Config) -> client.WebSocketClientProtocol:
         log.debug("Disabled certificate validation")
 
     return await client.connect(cfg.uri, ssl=ssl_context)
-
 
 
 class TrueNASClient:
@@ -76,7 +77,7 @@ class TrueNASClient:
             "ws_conn secure": self.ws_conn._secure,
             "truenas_cert_path": self.config.truenas_cert_path,
             "validate_certs": self.config.validate_certs,
-            "api_key": str(self.config.api_key), # str() obfuscates the key
+            "api_key": str(self.config.api_key),  # str() obfuscates the key
             "log_level": self.config.log_level,
             "no_color": self.config.no_color,
         }
@@ -96,9 +97,10 @@ class TrueNASClient:
         self.req_id += 1
         return d
 
-    async def connect(self) -> None: 
+    async def connect(self) -> None:
 
         import socket
+
         try:
             await self._connect()
         except ssl.SSLError as e:
@@ -150,7 +152,7 @@ class TrueNASClient:
             log.error("Authentication failed")
             await self.ws_conn.close()
             return
-            
+
         log.info("Authenticated.")
         self.authenticated = True
         asyncio.create_task(self._reader_loop())
@@ -175,9 +177,9 @@ class TrueNASClient:
                 break  # reader loop will handle reconnect
             else:
                 log.info("Heartbeat ping successful")
-                    
+
     # NOTE: Just to refresh your brain on how this works if you're rusty, in a
-    # proper websocket client architecture, the sending logic and the receiving logic 
+    # proper websocket client architecture, the sending logic and the receiving logic
     # are separated into two different concerns. The sending logic is the "writer"
     # and the receiving logic is the "reader". Technically, sending and receiving
     # are two different streams, websockets just abstract that into one interface.
@@ -191,10 +193,10 @@ class TrueNASClient:
             raise RuntimeError("Websocket client is not authenticated")
 
         payload["jsonrpc"] = "2.0"  #  in case its not set already
-        if "id" not in payload:     #  in case client supplies id
+        if "id" not in payload:  #  in case client supplies id
             payload["id"] = self.req_id
             self.req_id += 1
-        
+
         loop = asyncio.get_running_loop()
         future: asyncio.Future[dict[str, Any]] = loop.create_future()
 
@@ -202,7 +204,7 @@ class TrueNASClient:
 
         await self.ws_conn.send(json.dumps(payload))
         return await future  #! is this supposed to await the future before returning?
-                
+
     async def _reader_loop(self) -> None:
 
         # NOTE: This comment section is copied from the websockets.connect docstring:
@@ -257,4 +259,3 @@ class TrueNASClient:
                 future.cancel()
             self.pending.clear()
             self.authenticated = False
-
