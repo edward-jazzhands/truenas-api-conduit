@@ -324,16 +324,19 @@ request_help = f"""Make a request using the service. The service must be running
 Example: [{MENU_COLORS['command']}]truenas-api request system.info[/{MENU_COLORS['command']}]
 """
 
+filters_help = f"""Do some filter shit yo"""
 
 @cli.command(help=request_help)
 @click.argument("method", help="The method to call (ex: system.info)", required=True)
 @click.option("--params", "-p", help="The params to pass to the method")
+@click.option("--filter", "filters", nargs=3, multiple=True, metavar="FIELD OP VALUE", help=filters_help)
 @common_options
 @click.pass_context
 def request(
     ctx: click.RichContext,
     method: str,
     params: str | None = None,
+    filters: tuple[tuple[str, str, str], ...] = ()
 ) -> None:
 
     logging_setup(ctx)
@@ -344,16 +347,48 @@ def request(
         log.error("TrueNAS API Conduit service is not running")
         sys.exit(1)
 
-    params_list: list[Any] = []
+    # NOTE: The TrueNAS API needs params to be in TRIPLE NESTED LISTS.
+    # It is indeed kind of fuckin unhinged and it took me a while to figure out because
+    # they don't care much about whether their docs are easy to understand.
+
+    # Outermost []: the JSON-RPC params array, where each element is a positional argument
+    #               to the method
+    #    Middle []: the filters argument itself, a list of conditions
+    # Innermost []: a single condition, e.g. ["name", "=", "sda"]
+
+    # down below when we combine the filters and params, we wrap it in an additional
+    # list: combined = [filters_list + params_list]
+    # This wll give us the final triple nested list we need
+
+    filters_list = [list(f) for f in filters] if filters else []
+    params_list: list[list[Any]] = []
+    
     if params:
-        log.debug("Method: %s | Params: %s", method, params)
+        log.debug("Raw params: %s", params)
+        if params.find('“') != -1:
+            raise click.UsageError(
+                """You used the fancy smart quotes symbol (“) instead of the regular """
+                """doublequotes (")."""
+            )
+        if not params.strip().startswith("["):
+            raise click.UsageError(
+                "First character must be an opening bracket: ["
+            )
+        if params.strip()[1] == "'" or params.strip()[2]  == "'":
+            raise click.UsageError(
+                """You must use double quotes inside the params list, and encase it """
+                """with single quotes. (ex: '[["name", "=", "sda"]]')"""
+            )
         try:
             params_list = json.loads(params)
         except json.JSONDecodeError as e:
-            raise click.UsageError(f"Malformed params: {e}")
-
+            raise click.UsageError(f"Malformed params: {params}\n{e}")
+        log.info("Method: %s | Params list: %s", method, params_list)
+    
+    combined = [filters_list + params_list]
+    log.info("Full request params: %s", combined)
     response = request_helper(
-        core.Endpoints.RPC, {"method": method, "params": params_list}
+        core.Endpoints.RPC, {"method": method, "params": combined}
     )
     ctx.console.print(response)
 

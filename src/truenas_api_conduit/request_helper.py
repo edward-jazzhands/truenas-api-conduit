@@ -36,7 +36,7 @@ class RequestHelper:
         if endpoint not in core.Endpoints:
             raise ValueError(f"Invalid endpoint: {endpoint}")
 
-        log.debug("Making request")
+        log.info("Making request")
 
         import requests
         import yaspin
