@@ -8,3 +8,4 @@
 [X] Get params working properly in request command
 [X] Build nicer CLI options for filter params on request command
 [ ] Write first version of dockerfile for the containerized service
+[X] Write a README.md
