@@ -212,7 +212,9 @@ def check_service_status() -> int | None:
                     lock_dict["pid"],
                     proc_ident,
                 )
-                if SERVICE_NAME in proc_ident:  #                ...and the identifier matches
+                if (
+                    SERVICE_NAME in proc_ident
+                ):  #                ...and the identifier matches
                     log.debug("Name matches, checking signal")
                     # only return the lockfile port if we can confirm the process is alive
                     # via signal. If the signal fails, the PID is gone and the lockfile is stale.

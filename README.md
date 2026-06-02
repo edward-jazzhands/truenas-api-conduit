@@ -1,0 +1,76 @@
+# TrueNAS API Conduit
+
+[![badge](https://img.shields.io/badge/Requires_Python->=3.12-blue&logo=python)](https://python.org)
+[![badge](https://img.shields.io/badge/license-MIT-blue)](https://opensource.org/license/mit)
+
+A lightweight local service that holds a persistent, authenticated WebSocket connection to your TrueNAS instance and exposes it as a plain HTTP REST API, generally on localhost (but that's configurable).
+
+## Why This Exists
+
+TrueNAS [deprecated the REST API in 25.04 and is removing it in 26.0](https://www.truenas.com/docs/scale/gettingstarted/deprecations/). Everything is moving to their WebSocket API. This is overall a good thing because websockets are great, but it creates a serious problem for anything external that consumed the REST API: dashboards, scripts, monitoring tools, home automation integrations, and so on.
+
+The naive solution would be to rewrite everything to use WebSockets. The problem is that WebSockets aren't designed to be called ad-hoc. Every connection requires a TCP handshake, a TLS handshake, and an authentication round-trip before you can issue a single API call. TrueNAS even rate-limits this: exceed 20 auth attempts in 60 seconds and you're locked out for 10 minutes.
+
+**TrueNAS API Conduit solves this by pre-paying those costs once.** The service connects and authenticates at startup, then keeps that connection alive indefinitely. Your scripts and dashboards talk to a plain HTTP endpoint on localhost. The TrueNAS API essentially exists as a local OS service with a normal REST API, which you can curl, write your own programs to use, or access however else you feel like.
+
+**It's also 50x faster than using the REST API directly.** If you're currently calling the TrueNAS REST API, your existing tools can get a roughly 50x speed increase. The average response time for a REST API call (using curl) is usually in the 400-500ms range. TrueNAS API Conduit brings that down to 10-20ms per request.
+
+**A full proper CLI is built-in.** I've been creating CLI and TUI programs using Python for a few years, and my CLI game is pretty great. Rich help menus make it very easy to use and navigate, and it properly respects stdout/stderr separation so you can pipe the output into other programs (explained more below).
+
+### Benchmarks
+
+Benchmarks were done with hyperfine.
+
+Calling `core.ping` directly against the TrueNAS REST API (plug in your API key and server's HTTPS address to try it yourself):
+
+```sh
+hyperfine 'curl -k -H "Authorization: Bearer <API-KEY-CENSORED>" https://192.168.1.69:8443/api/v2.0/core/ping'
+
+  Time (mean ± σ):     479.8 ms ± 135.4 ms    [User: 9.0 ms, System: 1.7 ms]
+  Range (min … max):   431.2 ms … 864.8 ms    10 runs
+``` 
+
+Calling the same method through TrueNAS API Conduit:
+
+```sh
+hyperfine 'curl -X POST http://localhost:4567/rpc -H "Content-Type: application/json" -d "{\"method\": \"core.ping\", \"params\": []}"'
+
+  Time (mean ± σ): 9.7 ms ± 0.6 ms [User: 4.4 ms, System: 1.9 ms]
+  Range (min … max): 9.0 ms … 12.9 ms 289 runs
+```
+
+**~50x faster per request**, for the entire lifetime of the service. Every tool that talks to your NAS gets this for free. They can also all share the one persistent websocket connection.
+
+## How It Works
+
+```
+Your scripts / dashboards
+         │
+         │  HTTP POST to localhost:4567
+         ▼
+┌─────────────────────────┐
+│   TrueNAS API Conduit   │
+│   (aiohttp HTTP server) │
+│                         │
+│  persistent WebSocket ──┼──► TrueNAS (wss://your-nas/api/current)
+│  connection + auth      │
+└─────────────────────────┘
+```
+
+The conduit is a 12-factor style service: it reads configuration from environment variables and a config file, and writes logs to stdout. It runs happily as a Docker container, a system service, or a plain foreground process.
+
+## Documentation
+
+For detailed guides, installation, and usage, see documentation:
+
+### [Click here for documentation](https://github.com/edward-jazzhands/rich-pyfiglet/blob/main/docs/docs.md)
+
+## Questions, Issues, Suggestions?
+
+Use the [issues](https://github.com/edward-jazzhands/truenas-api-conduit/issues) section for bugs, issues, ideas or feature requests.
+
+## Thanks and Copyright
+
+MIT. See LICENSE file.
+
+TrueNAS Copyright [iX Systems](https://www.ixsystems.com/)

@@ -324,19 +324,28 @@ request_help = f"""Make a request using the service. The service must be running
 Example: [{MENU_COLORS['command']}]truenas-api request system.info[/{MENU_COLORS['command']}]
 """
 
+# FIXME: write this
 filters_help = f"""Do some filter shit yo"""
+
 
 @cli.command(help=request_help)
 @click.argument("method", help="The method to call (ex: system.info)", required=True)
 @click.option("--params", "-p", help="The params to pass to the method")
-@click.option("--filter", "filters", nargs=3, multiple=True, metavar="FIELD OP VALUE", help=filters_help)
+@click.option(
+    "--filter",
+    "filters",
+    nargs=3,
+    multiple=True,
+    metavar="FIELD OP VALUE",
+    help=filters_help,
+)
 @common_options
 @click.pass_context
 def request(
     ctx: click.RichContext,
     method: str,
     params: str | None = None,
-    filters: tuple[tuple[str, str, str], ...] = ()
+    filters: tuple[tuple[str, str, str], ...] = (),
 ) -> None:
 
     logging_setup(ctx)
@@ -362,19 +371,17 @@ def request(
 
     filters_list = [list(f) for f in filters] if filters else []
     params_list: list[list[Any]] = []
-    
+
     if params:
         log.debug("Raw params: %s", params)
-        if params.find('“') != -1:
+        if params.find("“") != -1:
             raise click.UsageError(
                 """You used the fancy smart quotes symbol (“) instead of the regular """
                 """doublequotes (")."""
             )
         if not params.strip().startswith("["):
-            raise click.UsageError(
-                "First character must be an opening bracket: ["
-            )
-        if params.strip()[1] == "'" or params.strip()[2]  == "'":
+            raise click.UsageError("First character must be an opening bracket: [")
+        if params.strip()[1] == "'" or params.strip()[2] == "'":
             raise click.UsageError(
                 """You must use double quotes inside the params list, and encase it """
                 """with single quotes. (ex: '[["name", "=", "sda"]]')"""
@@ -384,12 +391,13 @@ def request(
         except json.JSONDecodeError as e:
             raise click.UsageError(f"Malformed params: {params}\n{e}")
         log.info("Method: %s | Params list: %s", method, params_list)
-    
-    combined = [filters_list + params_list]
+
+    if filters_list or params_list:
+        combined = [filters_list + params_list]
+    else:
+        combined = []
     log.info("Full request params: %s", combined)
-    response = request_helper(
-        core.Endpoints.RPC, {"method": method, "params": combined}
-    )
+    response = request_helper(core.Endpoints.RPC, {"method": method, "params": combined})
     ctx.console.print(response)
 
 

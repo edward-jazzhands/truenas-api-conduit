@@ -5,6 +5,6 @@
 [ ] Get service install working on Linux
 [ ] Get service install working on Mac
 [ ] Get service install working on Windows
-[ ] Build poller module for writing specific query results to an output file.
 [X] Get params working properly in request command
 [X] Build nicer CLI options for filter params on request command
+[ ] Write first version of dockerfile for the containerized service

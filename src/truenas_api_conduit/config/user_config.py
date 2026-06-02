@@ -141,6 +141,7 @@ class Config(BaseSettings):
     log_level: str = "warning"
     no_color: bool = Field(default=False, validation_alias="NO_COLOR")
     socket_port: int = 4567
+    service_address: str = "127.0.0.1"
 
     # computed_field decorator docs:
     # https://pydantic.dev/docs/validation/latest/concepts/fields/#the-computed_field-decorator

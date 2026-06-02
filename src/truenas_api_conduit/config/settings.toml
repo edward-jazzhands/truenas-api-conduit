@@ -33,6 +33,10 @@ no_color = false
 # change it if you need to. (default: 4567)
 # socket_port = 4567
 
+# The address which the service will serve the local HTTP REST server on.
+# (Default: "127.0.0.1" / "localhost")
+# service_address = "127.0.0.1"
+
 # WARNING: This is only intended for future-proofing, in case the API route ever 
 # changes. This must match what TrueNAS currently uses. (Default: "/api/current")
 # api_route = "/api/current"
