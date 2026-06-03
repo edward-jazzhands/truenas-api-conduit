@@ -3,6 +3,7 @@ import signal
 import sys
 import logging
 import os
+import time
 import json
 from typing import Any, Callable, TYPE_CHECKING
 
@@ -50,7 +51,7 @@ if sys.platform != "win32":
     signal.signal(signal.SIGQUIT, handle_exit)
 
 
-MENU_COLORS: dict[str, str] = {
+COLORS: dict[str, str] = {
     "command": "deep_sky_blue1",
     "envvar": "orange1",
     "option": "bold cyan",
@@ -131,12 +132,12 @@ def common_options(f: Callable) -> Callable:
 
 
 verbose_help = f"""Sets the verbosity/logging level.
-[{MENU_COLORS['option']}]-v[/{MENU_COLORS['option']}] for info,
-[{MENU_COLORS['option']}]-vv[/{MENU_COLORS['option']}] for debug,
-[{MENU_COLORS['option']}]-vvv[/{MENU_COLORS['option']}] for trace"""
+[{COLORS['option']}]-v[/{COLORS['option']}] for info,
+[{COLORS['option']}]-vv[/{COLORS['option']}] for debug,
+[{COLORS['option']}]-vvv[/{COLORS['option']}] for trace"""
 
 no_color_help = f"""Disables color output. You can also set the
-[{MENU_COLORS['envvar']}]NO_COLOR[/{MENU_COLORS['envvar']}] environment variable to fully
+[{COLORS['envvar']}]NO_COLOR[/{COLORS['envvar']}] environment variable to fully
 disable color including the help menu"""
 
 
@@ -165,6 +166,13 @@ config_commands = [
     "print_config",
 ]
 
+help_commands = [
+    "cheatsheet",
+    "api_reference",
+    "version",
+    "help",
+]
+
 global_options = [
     "verbose",
     "no_color",
@@ -179,6 +187,7 @@ context = {
 @click.group(cls=CustomGroup, context_settings=context)
 @click.command_panel("Commands", commands=main_commands)
 @click.command_panel("Config", commands=config_commands)
+@click.command_panel("Help", commands=help_commands)
 @common_options
 @click.pass_context
 def cli(ctx: click.RichContext) -> None:
@@ -212,26 +221,26 @@ def cli(ctx: click.RichContext) -> None:
 
 start_help = f"""Tell your OS to start the conduit service. You can also
 start the program directly as a standalone program without installing by using the
-[{MENU_COLORS['option']}]--standalone[/{MENU_COLORS['option']}] option, which runs in
+[{COLORS['option']}]--standalone[/{COLORS['option']}] option, which runs in
 the foreground by default. Tip: to run standalone in the background, use:
-[{MENU_COLORS['command']}]truenas-api start --standalone & disown[/{MENU_COLORS['command']}]
+[{COLORS['command']}]truenas-api start --standalone & disown[/{COLORS['command']}]
 (Mac + Linux) or
-[{MENU_COLORS['command']}]Start-Process truenas-api start
---standalone[/{MENU_COLORS['command']}] (Windows)"""
+[{COLORS['command']}]Start-Process truenas-api start
+--standalone[/{COLORS['command']}] (Windows)"""
 
-standalone_help = """Starts the service as a standalone program in the foreground (not
+standalone_help = """Start the service as a standalone program in the foreground (not
 run by your service manager). Does not require installation"""
 
 api_key_help = f"""Ask to be prompted for your TrueNAS API key. You can also use the
-[{MENU_COLORS['command']}]set-key[/{MENU_COLORS['command']}] command (recommended),
+[{COLORS['command']}]set-key[/{COLORS['command']}] command (recommended),
 set an environment variable named
-[{MENU_COLORS['envvar']}]TRUENAS_API_KEY[/{MENU_COLORS['envvar']}], or set the
-[{MENU_COLORS['envvar']}]api_key[/{MENU_COLORS['envvar']}] field in the config file"""
+[{COLORS['envvar']}]TRUENAS_API_KEY[/{COLORS['envvar']}], or set the
+[{COLORS['envvar']}]api_key[/{COLORS['envvar']}] field in the config file"""
 
 truenas_host_help = f"""The address that you use to access the TrueNAS Web UI over
-HTTPS. You can also set the [{MENU_COLORS['envvar']}]truenas_host[/{MENU_COLORS['envvar']}]
+HTTPS. You can also set the [{COLORS['envvar']}]truenas_host[/{COLORS['envvar']}]
 field in the config file, or set an environment variable named
-[{MENU_COLORS['envvar']}]TRUENAS_HOST[/{MENU_COLORS['envvar']}]"""
+[{COLORS['envvar']}]TRUENAS_HOST[/{COLORS['envvar']}]"""
 
 
 @cli.command(help=start_help)
@@ -271,7 +280,7 @@ def start(
         # service.start(cfg)
 
 
-system_help = """Installs the service as a system service. This requires elevation"""
+system_help = """Install the service as a system service. This requires elevation"""
 package_help = """This is intended to be used by package managers"""
 
 
@@ -321,7 +330,7 @@ def uninstall(ctx: click.RichContext) -> None:
 
 
 request_help = f"""Make a request using the service. The service must be running.\n
-Example: [{MENU_COLORS['command']}]truenas-api request system.info[/{MENU_COLORS['command']}]
+Example: [{COLORS['command']}]truenas-api request system.info[/{COLORS['command']}]
 """
 
 # FIXME: write this
@@ -332,6 +341,7 @@ filters_help = f"""Do some filter shit yo"""
 @click.argument("method", help="The method to call (ex: system.info)", required=True)
 @click.option("--params", "-p", help="The params to pass to the method")
 @click.option(
+    "-f",
     "--filter",
     "filters",
     nargs=3,
@@ -348,6 +358,8 @@ def request(
     filters: tuple[tuple[str, str, str], ...] = (),
 ) -> None:
 
+    from rich.panel import Panel
+
     logging_setup(ctx)
     assert ctx.console is not None
 
@@ -357,8 +369,8 @@ def request(
         sys.exit(1)
 
     # NOTE: The TrueNAS API needs params to be in TRIPLE NESTED LISTS.
-    # It is indeed kind of fuckin unhinged and it took me a while to figure out because
-    # they don't care much about whether their docs are easy to understand.
+    # It is indeed kind of unhinged and it took me a while to figure out
+    # because their docs are not the easiest to understand.
 
     # Outermost []: the JSON-RPC params array, where each element is a positional argument
     #               to the method
@@ -369,7 +381,82 @@ def request(
     # list: combined = [filters_list + params_list]
     # This wll give us the final triple nested list we need
 
-    filters_list = [list(f) for f in filters] if filters else []
+    #     Supported Operators
+    # | Operator | Description                           |
+    # | -------- | ------------------------------------- |
+    # |   =      | x == y                                |
+    # |   !=     | x != y                                |
+    # |   >      | x > y                                 |
+    # |   >=     | x >= y                                |
+    # |   <      | x < y                                 |
+    # |   <=     | x <= y                                |
+    # |   ~      | re.match(y, x)                        |
+    # |   in     | x in y                                |
+    # |   nin    | x not in y                            |
+    # |   rin    | x is not None and y in x              |
+    # |   rnin   | x is not None and y not in x          |
+    # |   ^      | x is not None and x.startswith(y)     |
+    # |   !^     | x is not None and not x.startswith(y) |
+    # |   $      | x is not None and x.endswith(y)       |
+    # |   !$     | x is not None and not x.endswith(y)   |
+
+    supported_operators = (
+        "=",
+        "!=",
+        ">",
+        ">=",
+        "<",
+        "<=",
+        "~",
+        "in",
+        "nin",
+        "rin",
+        "rnin",
+        "^",
+        "!^",
+        "$",
+        "!$",
+    )
+
+    def usage_helper():
+        err_string = (
+            """\n[default]Filters must be in the format of FIELD OPERATOR VALUE\n"""
+            "Example: --filter name = sda\n"
+            "See TrueNAS API reference for more info (Tip: use "
+            f"[{COLORS['command']}]truenas-api reference[/{COLORS['command']}] "
+            "to print the URL to the API reference on your server)\n"
+        )
+        panel = Panel(
+            err_string,
+            title="Usage Error",
+            title_align="left",
+            style="bright_red"
+        )
+        console_stderr.print(panel)
+        sys.exit(1)
+
+    filters_list: list[list[str | int | bool | None]] = [list(f) for f in filters] if filters else []
+    for f in filters_list:
+        if len(f) != 3:
+            usage_helper()
+        if f[1] not in supported_operators:
+            usage_helper()
+        if f[2] in ("True", "true"):
+            f[2] = True
+        elif f[2] in ("False", "false"):
+            f[2] = False
+        elif f[2] in ("None", "none"):
+            f[2] = None
+        else:
+            int_keys = ("id", "size", "allocated", "free", "number")
+            if f[0] in int_keys:
+                try:
+                    f2_int = int(f[2]) # type: ignore
+                except (ValueError, TypeError):
+                    raise click.UsageError(f"{f[0]} value must be an integer. Got: {f[2]}")
+                else:
+                    f[2] = f2_int
+
     params_list: list[list[Any]] = []
 
     if params:
@@ -451,15 +538,26 @@ def status(ctx: click.RichContext) -> None:
         log.error("TrueNAS API Conduit service is not running")
         sys.exit(1)
 
-    response = request_helper(core.Endpoints.STATUS)
-    ctx.console.print(response)
+    if status := request_helper(core.Endpoints.STATUS):
+        ping = None
+        end = 0
+        if status["authenticated"]:
+            start = time.time()
+            ping = request_helper(core.Endpoints.RPC, {"method": "core.ping", "params": []})
+            end = time.time() - start
+        if ping:
+            ping_dict = {"ping": f"{end*1000:.0f} ms"}
+        else:
+            ping_dict = {"ping": "FAILED"}
+        ping_dict.update(status)  # this is just to put ping at the top
+        ctx.console.print(ping_dict)
 
 
 @cli.command()
 @common_options
 @click.pass_context
 def set_key(ctx: click.RichContext) -> None:
-    """Sets the API key using whatever compatible keyring/secrets manager is
+    """Set the API key using whatever compatible keyring/secrets manager is
     available on your system"""
 
     logging_setup(ctx)
@@ -471,7 +569,7 @@ def set_key(ctx: click.RichContext) -> None:
 
 
 config_help = f"""Attempts to open the config file in your editor, if
-[{MENU_COLORS['envvar']}]$EDITOR[/{MENU_COLORS['envvar']}] is set"""
+[{COLORS['envvar']}]$EDITOR[/{COLORS['envvar']}] is set"""
 
 
 @cli.command(help=config_help)
@@ -491,7 +589,7 @@ def config(ctx: click.RichContext) -> None:
 @common_options
 @click.pass_context
 def config_path(ctx: click.RichContext) -> None:
-    """Prints the path to the config file"""
+    """Print the path to the config file"""
 
     logging_setup(ctx)
     assert ctx.console is not None
@@ -509,7 +607,7 @@ def config_path(ctx: click.RichContext) -> None:
 @common_options
 @click.pass_context
 def print_config(ctx: click.RichContext) -> None:
-    """Validates and outputs your current configuration as JSON to stdout.
+    """Validate and output your current configuration as JSON to stdout.
     This can be saved and passed in to the service's stdin to start it.
     Logging/debug is separated out to stderr. Warning: This will output
     your full API key in plain text"""
@@ -531,10 +629,144 @@ def print_config(ctx: click.RichContext) -> None:
 @cli.command()
 @common_options
 @click.pass_context
-def version(ctx: click.RichContext) -> None:
-    """Prints the version of the TrueNAS API Conduit service"""
+def cheatsheet(ctx: click.RichContext) -> None:
+    """Print a cheatsheet showing how to do a bunch of commmon API requests"""
 
     logging_setup(ctx)
     assert ctx.console is not None
 
-    ctx.console.print(f"{APP_NAME} version {__version__}")
+    from rich.table import Table
+    from rich.style import Style
+
+    command_style = Style(
+        color=f"{COLORS['command']}",
+        bold=True,
+    )
+    desc_style = Style(
+        italic=True,
+    )
+
+    table = Table(
+        style=Style(
+            color="green4",
+            bold=True,
+        ),
+        padding=(0, 2),
+    )
+
+    table.add_column("TrueNAS API Cheatsheet")
+    # =============
+    table.add_row("truenas-api request core.ping", style=command_style)
+    table.add_row("Simple ping", style=desc_style, end_section=True)
+    # =============
+    table.add_row("truenas-api request system.info", style=command_style)
+    table.add_row("Get basic system info", style=desc_style, end_section=True)
+    # =============
+    table.add_row("truenas-api request pool.query", style=command_style)
+    table.add_row("Get data for all pools", style=desc_style, end_section=True)
+    # =============
+    table.add_row(
+        "truenas-api request disk.query --filter name = sda",
+        style=command_style,
+    )
+    table.add_row(
+        "Get info for disk with name of 'sda'", style=desc_style, end_section=True
+    )
+    # =============
+    table.add_row(
+        "truenas-api request disk.query --filter size '>' 100",
+        style=command_style,
+    )
+    table.add_row(
+        "Get info for all disks with size > 100.\nNote how the operator is in quotes "
+        "for bash compatibility",
+        style=desc_style,
+        end_section=True,
+    )
+    # =============
+    table.add_row(
+        "truenas-api request disk.query -f 'size' '>' '100'",
+        style=command_style,
+    )
+    table.add_row(
+        "Same as above, but with FIELD OPERATOR VALUE all in quotes",
+        style=desc_style,
+        end_section=True,
+    )
+    # =============
+    table.add_row(
+        "truenas-api request disk.query -f name rin sda",
+        style=command_style,
+    )
+    table.add_row(
+        "Get info for disks whose name contains the string 'sda' (ie. sda1, etc.)",
+        style=desc_style,
+        end_section=True,
+    )
+    # =============
+    table.add_row(
+        "truenas-api request pool.query -f free '>' 1000 -f status = ONLINE",
+        style=command_style,
+    )
+    table.add_row(
+        "Get info for pools with free space > 1000 and status = ONLINE",
+        style=desc_style,
+        end_section=True,
+    )
+    # =============
+    table.add_row(
+        """truenas-api request disk.query --params '[["name", "=", "sda"]]'""",
+        style=command_style,
+    )
+    table.add_row("Manually doing what --filter does under the hood", style=desc_style, end_section=True)
+    # =============
+    table.add_row(
+        """truenas-api request pool.query --params '[["free", ">", 1000], ["status", "=", "ONLINE"]]'""",
+        style=command_style,
+    )
+    table.add_row(
+        "Passing in a list of filters. Each filter is a triplet array.\nNote the number "
+        "1000 is not in quotes so its treated as an int", style=desc_style, end_section=True
+    )
+
+    ctx.console.print()
+    ctx.console.print(table)
+
+
+@cli.command()
+@common_options
+@click.pass_context
+def reference(ctx: click.RichContext) -> None:
+    """Print the URL to the TrueNAS API reference on your server"""
+
+    logging_setup(ctx)
+    assert ctx.console is not None
+
+    cfg = config_setup(ctx.obj)
+
+    ctx.console.print(f"https://{cfg.truenas_host}/api/docs/current")
+
+
+@cli.command()
+@common_options
+@click.pass_context
+def version(ctx: click.RichContext) -> None:
+    """Print the version of the TrueNAS API Conduit service"""
+
+    logging_setup(ctx)
+    assert ctx.console is not None
+
+    ctx.console.print(f"{APP_NAME} {__version__}")
+
+
+@cli.command()
+@common_options
+@click.pass_context
+def help(ctx: click.RichContext) -> None:
+    """Alias for the main --help"""
+
+    logging_setup(ctx)
+    assert ctx.console is not None
+
+    assert ctx.parent is not None
+    ctx.console.print(ctx.parent.get_help())

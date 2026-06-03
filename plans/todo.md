@@ -9,3 +9,7 @@
 [X] Build nicer CLI options for filter params on request command
 [ ] Write first version of dockerfile for the containerized service
 [X] Write a README.md
+[X] Create a cheatsheet command in the CLI
+[X] Create an API reference command in the CLI
+[ ] Set up tab completion for commands and options in the CLI
+[X] Add ping to status check

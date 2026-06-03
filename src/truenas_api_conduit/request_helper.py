@@ -29,7 +29,7 @@ class RequestHelper:
 
     def __call__(
         self, endpoint: core.Endpoints, json_dict: dict[str, Any] | None = None
-    ) -> dict[str, Any] | str:
+    ) -> dict[str, Any] | None:
         """no json = GET
         pass in json = POST"""
 
@@ -67,7 +67,7 @@ class RequestHelper:
             return response.json()
         except json.JSONDecodeError as e:
             log.error("Malformed response: %s | Raw response: %s", e, response.text)
-            return response.text
+            return
 
 
 def auto_find_service_port() -> int | None:

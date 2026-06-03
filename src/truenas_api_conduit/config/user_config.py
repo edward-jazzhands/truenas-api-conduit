@@ -15,7 +15,7 @@ from pydantic_settings import (
 
 # project
 from truenas_api_conduit import log_setup
-from truenas_api_conduit.console import console_stderr
+from truenas_api_conduit.console import set_no_color
 from truenas_api_conduit.core import CONFIG_PATH
 from truenas_api_conduit.config.keyring_source import KeyringSettingsSource
 
@@ -198,7 +198,7 @@ class Config(BaseSettings):
 
         if self.no_color:
             log.debug("Config post init: Disabling color output")
-        console_stderr.no_color = self.no_color
+            set_no_color()
 
         for field, value in Config.model_fields.items():
             if field not in self.provenance:

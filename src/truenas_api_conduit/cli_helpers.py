@@ -11,13 +11,12 @@ if TYPE_CHECKING:
     import tomllib
 
 # third-party
-from rich.panel import Panel
 import rich_click as click
 
 # project
 from truenas_api_conduit import log_setup
 import truenas_api_conduit.core as core
-from truenas_api_conduit.console import console_stderr
+from truenas_api_conduit.console import console_stderr, set_no_color
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +49,7 @@ def logging_setup(ctx: click.RichContext) -> None:
 
     nc_env = os.environ.get("NO_COLOR")
     if nc_env is not None or ctx.obj.no_color:
-        console_stderr.no_color = True
+        set_no_color()
 
     if ctx.obj.verbose > 1:
         console_stderr.print(ctx.obj)
@@ -102,6 +101,7 @@ def config_setup(cli_options: CLIOptions) -> Config:
     # of the heavier dependencies so this improves startup time.
     from truenas_api_conduit.config import Config
     from pydantic import ValidationError  # .config already imports pydantic
+    from rich.panel import Panel
     import tomllib
 
     try:
@@ -152,6 +152,8 @@ def config_setup(cli_options: CLIOptions) -> Config:
 
 
 def _toml_decoding_error_panel(e: tomllib.TOMLDecodeError) -> None:
+
+    from rich.panel import Panel
 
     err_string = (
         "[default]Your config file could not be parsed due to a TOML syntax error "
