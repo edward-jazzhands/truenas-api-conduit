@@ -13,6 +13,7 @@ def set_no_color() -> None:
     console_stderr.no_color = True
     console_stdout.no_color = True
 
+
 # ! not used anymore
 def set_max_width(width: int) -> None:
     console_stderr.width = min(width, console_stderr.size.width)

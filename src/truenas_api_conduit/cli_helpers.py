@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 # third-party
 import rich_click as click
+from rich.panel import Panel
 
 # project
 from truenas_api_conduit import log_setup
@@ -42,6 +43,13 @@ class CLIOptions:
     verbose: int = 0
     no_color: bool | None = None
     pretty: bool | None = None
+
+
+def usage_helper(err_string: str):
+
+    panel = Panel(err_string, title="Usage Error", title_align="left", style="bright_red")
+    console_stderr.print(panel)
+    sys.exit(1)
 
 
 def logging_setup(ctx: click.RichContext) -> None:

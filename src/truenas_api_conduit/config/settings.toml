@@ -30,8 +30,9 @@
 # (REQUIRED) Your TrueNAS API key.
 # WARNING: Storing API keys in plain text can be a security risk.
 # Recommended to use the set-key command in the CLI (which utilizes your OS's 
-# secrets manager). Additionally you can set the environment variable, or 
-# use the --api-key option on the CLI. 
+# secrets manager), or use the --api-key option on the CLI which will prompt
+# you for the key so that it's not stored anywhere. Additionally you can set
+# the environment variable.
 #     Default: None
 #     Equivalent Environment Var: TRUENAS_API_KEY
 

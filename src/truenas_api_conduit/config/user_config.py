@@ -220,8 +220,6 @@ class Config(BaseSettings):
             )
         return v
 
-
-
     # FOR REFERENCE: Example expanding a path:
     # @field_validator("local_storage_path", mode="before")
     # @classmethod

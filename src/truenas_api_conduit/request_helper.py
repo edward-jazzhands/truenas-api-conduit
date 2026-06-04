@@ -4,6 +4,7 @@ import logging
 import os
 import json
 from typing import Any, TYPE_CHECKING
+
 if TYPE_CHECKING:
     import requests
 
@@ -46,7 +47,7 @@ class RequestHelper:
 
         try:
             with yaspin.yaspin(
-                Spinners.bouncingBall, 
+                Spinners.bouncingBall,
                 text="Sending request...",
                 stream=sys.stderr,
             ):

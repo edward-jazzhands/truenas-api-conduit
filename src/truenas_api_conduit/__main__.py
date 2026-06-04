@@ -21,7 +21,12 @@ from rich.traceback import install as tb_install
 from truenas_api_conduit import __version__, APP_NAME
 import truenas_api_conduit.core as core
 from truenas_api_conduit.console import console_stderr, console_stdout
-from truenas_api_conduit.cli_helpers import CLIOptions, logging_setup, config_setup
+from truenas_api_conduit.cli_helpers import (
+    CLIOptions,
+    logging_setup,
+    config_setup,
+    usage_helper,
+)
 from truenas_api_conduit.request_helper import get_request_helper
 
 # rich tracebacks
@@ -36,6 +41,7 @@ click.rich_click.THEME = "cargo-modern"
 # colorschemes: #~ [default, star, quartz, quartz2, cargo, forest, nord, dracula, solarized]
 # theme types: #~ [box, slim, modern, robo, nu]
 # nord, dracula, and solarized are "risky" according to the docs.
+
 
 def handle_exit(*_):
     console_stderr.print("\nShutting down.")
@@ -127,15 +133,26 @@ def common_options(f: Callable) -> Callable:
     # in the decorator chain ('f') and passing it into whatever function was
     # returned by click.option.
 
+
 def set_pretty_param(ctx: click.Context, param: click.Parameter, value: bool) -> bool:
     ctx.ensure_object(CLIOptions)
     if ctx.obj.pretty is None:
         ctx.obj.pretty = value
     return value
-    
+
+
 def request_options(f: Callable) -> Callable:
-    f = click.option("-fmt", "--pretty", is_flag=True, callback=set_pretty_param, default=False, expose_value=False, help=pretty_help)(f)
+    f = click.option(
+        "-fmt",
+        "--pretty",
+        is_flag=True,
+        callback=set_pretty_param,
+        default=False,
+        expose_value=False,
+        help=pretty_help,
+    )(f)
     return f
+
 
 verbose_help = f"""Sets the verbosity/logging level.
 [{COLORS['option']}]-v[/{COLORS['option']}] for info,
@@ -170,6 +187,7 @@ config_commands = [
     "config",
     "config_path",
     "print_config",
+    "completions",
 ]
 
 help_commands = [
@@ -228,7 +246,8 @@ def cli(ctx: click.RichContext) -> None:
 start_help = f"""Tell your OS to start the conduit service. You can also
 start the program directly as a standalone program without installing by using the
 [{COLORS['option']}]--standalone[/{COLORS['option']}] option, which runs in
-the foreground by default. Tip: to run standalone in the background, use:
+the foreground by default.\n
+Tip: to run standalone in the background, use:
 [{COLORS['command']}]truenas-api start --standalone & disown[/{COLORS['command']}]
 (Mac + Linux) or
 [{COLORS['command']}]Start-Process truenas-api start
@@ -336,8 +355,9 @@ def uninstall(ctx: click.RichContext) -> None:
 
 
 request_help = f"""Make a request using the service. The service must be running.\n
-Example: [{COLORS['command']}]truenas-api request system.info[/{COLORS['command']}]
-"""
+Example: [{COLORS['command']}]truenas-api request system.info[/{COLORS['command']}]\n
+Use the [{COLORS['command']}]cheatsheet[/{COLORS['command']}] command to see a list
+of some common requests and examples of how to use them"""
 
 filters_help = f"""Add a filter to the request. Filters are in the form of
 'filter triplets' as defined by the TrueNAS API. Triplet format is
@@ -347,7 +367,8 @@ filters_help = f"""Add a filter to the request. Filters are in the form of
 
 pretty_help = f"""Format the JSON response to be human-readable. Alternatively
 you can pipe the response into
-[{COLORS['command']}]jq[/{COLORS['command']}]"""
+[{COLORS['command']}]jq[/{COLORS['command']}] (can be faster)"""
+
 
 @cli.command(help=request_help)
 @click.argument("method", help="The method to call (ex: system.info)", required=True)
@@ -431,29 +452,22 @@ def request(
         "!$",
     )
 
-    def usage_helper():
-        err_string = (
-            """\n[default]Filters must be in the format of FIELD OPERATOR VALUE\n"""
-            "Example: --filter name = sda\n"
-            "See TrueNAS API reference for more info (Tip: use "
-            f"[{COLORS['command']}]truenas-api reference[/{COLORS['command']}] "
-            "to print the URL to the API reference on your server)\n"
-        )
-        panel = Panel(
-            err_string,
-            title="Usage Error",
-            title_align="left",
-            style="bright_red"
-        )
-        console_stderr.print(panel)
-        sys.exit(1)
+    err_string = (
+        """\n[default]Filters must be in the format of FIELD OPERATOR VALUE\n"""
+        "Example: --filter name = sda\n"
+        "See TrueNAS API reference for more info (Tip: use "
+        f"[{COLORS['command']}]truenas-api reference[/{COLORS['command']}] "
+        "to print the URL to the API reference on your server)\n"
+    )
 
-    filters_list: list[list[str | int | bool | None]] = [list(f) for f in filters] if filters else []
+    filters_list: list[list[str | int | bool | None]] = (
+        [list(f) for f in filters] if filters else []
+    )
     for f in filters_list:
         if len(f) != 3:
-            usage_helper()
+            usage_helper(err_string)
         if f[1] not in supported_operators:
-            usage_helper()
+            usage_helper(err_string)
         if f[2] in ("True", "true"):
             f[2] = True
         elif f[2] in ("False", "false"):
@@ -464,9 +478,11 @@ def request(
             int_keys = ("id", "size", "allocated", "free", "number")
             if f[0] in int_keys:
                 try:
-                    f2_int = int(f[2]) # type: ignore
-                except (ValueError, TypeError):
-                    raise click.UsageError(f"{f[0]} value must be an integer. Got: {f[2]}")
+                    f2_int = int(f[2])  # type: ignore
+                except ValueError, TypeError:
+                    raise click.UsageError(
+                        f"{f[0]} value must be an integer. Got: {f[2]}"
+                    )
                 else:
                     f[2] = f2_int
 
@@ -503,8 +519,11 @@ def request(
         try:
             ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
         except json.JSONDecodeError as e:
-            log.error("Response from server is not valid JSON: %s | Disable pretty "
-            "printing to see the raw response", e)
+            log.error(
+                "Response from server is not valid JSON: %s | Disable pretty "
+                "printing to see the raw response",
+                e,
+            )
             sys.exit(1)
     else:
         ctx.console.print(response.text, soft_wrap=True)
@@ -530,8 +549,11 @@ def stop(ctx: click.RichContext) -> None:
         try:
             ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
         except json.JSONDecodeError as e:
-            log.error("Response from server is not valid JSON: %s | Disable pretty "
-            "printing to see the raw response", e)
+            log.error(
+                "Response from server is not valid JSON: %s | Disable pretty "
+                "printing to see the raw response",
+                e,
+            )
             sys.exit(1)
     else:
         ctx.console.print(response.text, soft_wrap=True)
@@ -557,8 +579,11 @@ def restart(ctx: click.RichContext) -> None:
         try:
             ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
         except json.JSONDecodeError as e:
-            log.error("Response from server is not valid JSON: %s | Disable pretty "
-            "printing to see the raw response", e)
+            log.error(
+                "Response from server is not valid JSON: %s | Disable pretty "
+                "printing to see the raw response",
+                e,
+            )
             sys.exit(1)
     else:
         ctx.console.print(response.text, soft_wrap=True)
@@ -584,8 +609,11 @@ def status(ctx: click.RichContext) -> None:
         try:
             ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
         except json.JSONDecodeError as e:
-            log.error("Response from server is not valid JSON: %s | Disable pretty "
-            "printing to see the raw response", e)
+            log.error(
+                "Response from server is not valid JSON: %s | Disable pretty "
+                "printing to see the raw response",
+                e,
+            )
             sys.exit(1)
     else:
         ctx.console.print(response.text, soft_wrap=True)
@@ -612,31 +640,34 @@ config_help = f"""Attempts to open the config file in your editor, if
 
 @cli.command(help=config_help)
 @common_options
-@click.pass_context
-def config(ctx: click.RichContext) -> None:
-
-    logging_setup(ctx)
+def config() -> None:
 
     editor = os.environ.get("EDITOR")
-    if not editor:
-        raise click.UsageError("No editor set. Set the $EDITOR environment variable")
-    os.execvp(editor, [editor, core.CONFIG_PATH])
+    if editor:
+        os.execvp(editor, [editor, core.CONFIG_PATH])
+    else:
+        err_string = (
+            f"[default]No editor set. Set the [{COLORS['envvar']}]$EDITOR[default] "
+            "environment variable"
+        )
+        usage_helper(err_string)
 
 
 @cli.command()
 @common_options
 @click.pass_context
 def config_path(ctx: click.RichContext) -> None:
-    """Print the path to the config file"""
+    """Print the path to the config file (you can eval this)"""
 
     logging_setup(ctx)
     assert ctx.console is not None
+    ctx.console.no_color = True
 
     ctx.console.print(core.CONFIG_PATH)  # stdout for piping
     console_stderr.print(f"Created already?: {core.CONFIG_PATH.exists()}")
     console_stderr.print(
         f"[italic]Tip: You can pipe this command into an editor:[/italic]"
-        "  [yellow]nano $(truenas-api config-path)[/yellow]",
+        f"""  [{COLORS['command']}]nano $(truenas-api config-path)""",
         markup=True,
     )
 
@@ -673,16 +704,20 @@ def cheatsheet(ctx: click.RichContext) -> None:
     logging_setup(ctx)
     assert ctx.console is not None
 
-    from truenas_api_conduit.cheatsheet import table, table2
+    from truenas_api_conduit.cheatsheet import get_tables
 
     ctx.console.print()
-    ctx.console.print(table)
+    for table in get_tables():
+        ctx.console.print(table)
     ctx.console.print(
         "\n  Remember that you can always pipe the response into jq to filter "
-        "and format the results\n",
-        style="italic"
+        "and format the results\n\n"
+        "  Read the TrueNAS API reference for a full list of all available "
+        "methods and their parameters\n",
+        f" Tip: use the [{COLORS['command']}]reference[/{COLORS['command']}] command "
+        "to print the URL to the API reference on your server\n",
+        style="italic",
     )
-    ctx.console.print(table2)
 
 
 @cli.command()
@@ -722,3 +757,20 @@ def help(ctx: click.RichContext) -> None:
 
     assert ctx.parent is not None
     ctx.console.print(ctx.parent.get_help())
+
+
+@cli.command()
+@common_options
+@click.pass_context
+def completions(ctx: click.RichContext) -> None:
+    "Print the commands to enable tab completions in your shell (you can eval this)"
+
+    assert ctx.console is not None
+    ctx.console.no_color = True
+    ctx.console.print('eval "$(_TRUENAS_API_COMPLETE=bash_source truenas-api)";')
+    ctx.console.print('eval "$(_TRUENAS_API_CONDUIT_COMPLETE=bash_source truenas-api)";')
+    console_stderr.print(
+        f"[italic]Tip: You can eval this command to enable tab completions:[/italic]"
+        f'''  [{COLORS['command']}]eval "$(truenas-api completions)"''',
+        markup=True,
+    )
