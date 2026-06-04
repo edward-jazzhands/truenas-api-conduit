@@ -77,7 +77,7 @@ async def status(request: web.Request) -> web.Response:
 
     log.info("Status request received")
     client: TrueNASClient = request.app["truenas"]
-    result = client.status()
+    result = await client.status()
     log.info("Status request successful")
     return web.json_response(result)
 

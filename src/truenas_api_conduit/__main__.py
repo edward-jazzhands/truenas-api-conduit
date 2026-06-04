@@ -127,6 +127,15 @@ def common_options(f: Callable) -> Callable:
     # in the decorator chain ('f') and passing it into whatever function was
     # returned by click.option.
 
+def set_pretty_param(ctx: click.Context, param: click.Parameter, value: bool) -> bool:
+    ctx.ensure_object(CLIOptions)
+    if ctx.obj.pretty is None:
+        ctx.obj.pretty = value
+    return value
+    
+def request_options(f: Callable) -> Callable:
+    f = click.option("-fmt", "--pretty", is_flag=True, callback=set_pretty_param, default=False, expose_value=False, help=pretty_help)(f)
+    return f
 
 verbose_help = f"""Sets the verbosity/logging level.
 [{COLORS['option']}]-v[/{COLORS['option']}] for info,
@@ -330,9 +339,15 @@ request_help = f"""Make a request using the service. The service must be running
 Example: [{COLORS['command']}]truenas-api request system.info[/{COLORS['command']}]
 """
 
-# FIXME: write this
-filters_help = f"""Do some filter shit yo"""
+filters_help = f"""Add a filter to the request. Filters are in the form of
+'filter triplets' as defined by the TrueNAS API. Triplet format is
+[{COLORS['envvar']}]FIELD OPERATOR VALUE[/{COLORS['envvar']}]. For example:
+[{COLORS['option']}]--filter name = sda[/{COLORS['option']}]
+"""
 
+pretty_help = f"""Format the JSON response to be human-readable. Alternatively
+you can pipe the response into
+[{COLORS['command']}]jq[/{COLORS['command']}]"""
 
 @cli.command(help=request_help)
 @click.argument("method", help="The method to call (ex: system.info)", required=True)
@@ -346,6 +361,7 @@ filters_help = f"""Do some filter shit yo"""
     metavar="FIELD OP VALUE",
     help=filters_help,
 )
+@request_options
 @common_options
 @click.pass_context
 def request(
@@ -481,11 +497,21 @@ def request(
     else:
         combined = []
     log.info("Full request params: %s", combined)
+
     response = request_helper(core.Endpoints.RPC, {"method": method, "params": combined})
-    ctx.console.print(response)
+    if ctx.obj.pretty:
+        try:
+            ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
+        except json.JSONDecodeError as e:
+            log.error("Response from server is not valid JSON: %s | Disable pretty "
+            "printing to see the raw response", e)
+            sys.exit(1)
+    else:
+        ctx.console.print(response.text, soft_wrap=True)
 
 
 @cli.command()
+@request_options
 @common_options
 @click.pass_context
 def stop(ctx: click.RichContext) -> None:
@@ -500,10 +526,19 @@ def stop(ctx: click.RichContext) -> None:
         sys.exit(1)
 
     response = request_helper(core.Endpoints.SHUTDOWN, {})  # needs empty dict to POST
-    ctx.console.print(response)
+    if ctx.obj.pretty:
+        try:
+            ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
+        except json.JSONDecodeError as e:
+            log.error("Response from server is not valid JSON: %s | Disable pretty "
+            "printing to see the raw response", e)
+            sys.exit(1)
+    else:
+        ctx.console.print(response.text, soft_wrap=True)
 
 
 @cli.command()
+@request_options
 @common_options
 @click.pass_context
 def restart(ctx: click.RichContext) -> None:
@@ -518,14 +553,23 @@ def restart(ctx: click.RichContext) -> None:
         sys.exit(1)
 
     response = request_helper(core.Endpoints.RESTART, {})
-    ctx.console.print(response)
+    if ctx.obj.pretty:
+        try:
+            ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
+        except json.JSONDecodeError as e:
+            log.error("Response from server is not valid JSON: %s | Disable pretty "
+            "printing to see the raw response", e)
+            sys.exit(1)
+    else:
+        ctx.console.print(response.text, soft_wrap=True)
 
 
 @cli.command()
+@request_options
 @common_options
 @click.pass_context
 def status(ctx: click.RichContext) -> None:
-    """Check the status of the conduit service"""
+    """Check the status/ping of the conduit service"""
 
     logging_setup(ctx)
     assert ctx.console is not None
@@ -535,19 +579,16 @@ def status(ctx: click.RichContext) -> None:
         log.error("TrueNAS API Conduit service is not running")
         sys.exit(1)
 
-    if status := request_helper(core.Endpoints.STATUS):
-        ping = None
-        end = 0
-        if status["authenticated"]:
-            start = time.time()
-            ping = request_helper(core.Endpoints.RPC, {"method": "core.ping", "params": []})
-            end = time.time() - start
-        if ping:
-            ping_dict = {"ping": f"{end*1000:.0f} ms"}
-        else:
-            ping_dict = {"ping": "FAILED"}
-        ping_dict.update(status)  # this is just to put ping at the top
-        ctx.console.print(ping_dict)
+    response = request_helper(core.Endpoints.STATUS)
+    if ctx.obj.pretty:
+        try:
+            ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
+        except json.JSONDecodeError as e:
+            log.error("Response from server is not valid JSON: %s | Disable pretty "
+            "printing to see the raw response", e)
+            sys.exit(1)
+    else:
+        ctx.console.print(response.text, soft_wrap=True)
 
 
 @cli.command()
@@ -636,7 +677,11 @@ def cheatsheet(ctx: click.RichContext) -> None:
 
     ctx.console.print()
     ctx.console.print(table)
-    ctx.console.print()
+    ctx.console.print(
+        "\n  Remember that you can always pipe the response into jq to filter "
+        "and format the results\n",
+        style="italic"
+    )
     ctx.console.print(table2)
 
 

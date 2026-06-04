@@ -41,6 +41,7 @@ class CLIOptions:
     truenas_host: str | None = None
     verbose: int = 0
     no_color: bool | None = None
+    pretty: bool | None = None
 
 
 def logging_setup(ctx: click.RichContext) -> None:

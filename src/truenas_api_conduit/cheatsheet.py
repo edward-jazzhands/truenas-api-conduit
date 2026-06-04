@@ -23,7 +23,13 @@ table.add_row("truenas-api request core.ping", style=command_style)
 table.add_row("Simple ping", style=desc_style, end_section=True)
 # =============
 table.add_row("truenas-api request system.info", style=command_style)
-table.add_row("Get basic system info", style=desc_style, end_section=True)
+table.add_row("Get system info", style=desc_style, end_section=True)
+# =============
+table.add_row("truenas-api request system.info | jq", style=command_style)
+table.add_row("Get system info, pipe response into jq (makes it human-readable)", style=desc_style, end_section=True)
+# =============
+table.add_row("truenas-api request system.info -fmt", style=command_style)
+table.add_row("Get system info in human-readable format", style=desc_style, end_section=True)
 # =============
 table.add_row("truenas-api request pool.query", style=command_style)
 table.add_row("Get data for all pools", style=desc_style, end_section=True)
@@ -34,6 +40,14 @@ table.add_row(
 )
 table.add_row(
     "Get info for disk with name of 'sda'", style=desc_style, end_section=True
+)
+# =============
+table.add_row(
+    """truenas-api request disk.query | jq '.result[] | select(.name == "sda")'""",
+    style=command_style,
+)
+table.add_row(
+    "Filter results using jq instead of putting the filter in the request", style=desc_style, end_section=True
 )
 # =============
 table.add_row(
@@ -48,17 +62,17 @@ table.add_row(
 )
 # =============
 table.add_row(
-    "truenas-api request disk.query -f 'size' '>' '100'",
+    "truenas-api request disk.query -f 'size' '>' '100' | jq",
     style=command_style,
 )
 table.add_row(
-    "Same as above, but with FIELD OPERATOR VALUE all in quotes",
+    "Same as above, but with FIELD OPERATOR VALUE all in quotes, then piped into jq",
     style=desc_style,
     end_section=True,
 )
 # =============
 table.add_row(
-    "truenas-api request disk.query -f name rin sda",
+    "truenas-api request disk.query -f name rin sda --pretty",
     style=command_style,
 )
 table.add_row(
@@ -102,12 +116,17 @@ table2 = Table(
 
 table2.add_column("Examples using curl (Change address/port as needed)")
 # =============
-table2.add_row("curl http://localhost:4567/status | jq ", style=command_style)
+table2.add_row("curl localhost:4567/status | jq ", style=command_style)
 table2.add_row("Get service status and pipe results into jq", style=desc_style, end_section=True)
 # =============
-table2.add_row(r"""curl -X POST http://localhost:4567/rpc -H 'Content-Type: application/json' -d '{"method": "core.ping", "params": []}' """, style=command_style)
+table2.add_row(r"""curl -X POST localhost:4567/rpc -H 'Content-Type: application/json' -d '{"method": "core.ping", "params": []}' """, style=command_style)
 table2.add_row("Simple ping", style=desc_style, end_section=True)
 # =============
-table2.add_row(r"""curl -X POST http://localhost:4567/rpc -H 'Content-Type: application/json' -d '{"method": "disk.query", "params": [[["name", "=", "sda"]]]}' | jq """, style=command_style)
+table2.add_row(r"""curl -X POST localhost:4567/rpc -H 'Content-Type: application/json' -d '{"method": "disk.query", "params": [[["name", "=", "sda"]]]}' | jq """, style=command_style)
 table2.add_row("Disk query with filter, results piped into jq", style=desc_style, end_section=True)
 # =============
+table2.add_row(r"""curl -X POST localhost:4567/rpc -H 'Content-Type: application/json' -d '{"method": "pool.query", "params": []}' | jq '.result[] | select(.warning == true)'""", style=command_style)
+table2.add_row("Use jq to filter results instead of putting the filter in the request", style=desc_style, end_section=True)
+
+table2.add_row(r"""curl -X POST localhost:4567/rpc -H 'Content-Type: application/json' -d '{"method": "pool.query", "params": []}' | jq '.result[] | select(.free < 1000000)'""", style=command_style)
+table2.add_row("Using jq math operations to filter results", style=desc_style, end_section=True)

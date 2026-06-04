@@ -7,6 +7,7 @@ from pathlib import Path
 import logging
 import json
 import sys
+import time
 
 # third party
 import websockets.client as client
@@ -67,8 +68,18 @@ class TrueNASClient:
         self.req_id = 1
         self.authenticated: bool = False
 
-    def status(self) -> dict[str, Any]:
+    async def status(self) -> dict[str, Any]:
+
+        if self.authenticated:
+            start_time = time.time()
+            await self({"method": "core.ping", "params": []})
+            end_time = time.time()
+            ping = f"{(end_time - start_time)*1000:.0f} ms"
+        else:
+            ping = "not authenticated"
+
         return {
+            "client-server ping:": ping,
             "authenticated": self.authenticated,
             "req_id": self.req_id,
             "ws_conn host": self.ws_conn._host,
@@ -204,6 +215,10 @@ class TrueNASClient:
 
         await self.ws_conn.send(json.dumps(payload))
         return await future  #! is this supposed to await the future before returning?
+
+    @property
+    def call(self):
+        return self.__call__
 
     async def _reader_loop(self) -> None:
 

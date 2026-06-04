@@ -3,7 +3,9 @@ import sys
 import logging
 import os
 import json
-from typing import Any
+from typing import Any, TYPE_CHECKING
+if TYPE_CHECKING:
+    import requests
 
 # third-party
 import psutil
@@ -29,7 +31,7 @@ class RequestHelper:
 
     def __call__(
         self, endpoint: core.Endpoints, json_dict: dict[str, Any] | None = None
-    ) -> dict[str, Any] | None:
+    ) -> requests.Response:
         """no json = GET
         pass in json = POST"""
 
@@ -43,7 +45,11 @@ class RequestHelper:
         from yaspin.spinners import Spinners
 
         try:
-            with yaspin.yaspin(Spinners.bouncingBall, text="Sending request..."):
+            with yaspin.yaspin(
+                Spinners.bouncingBall, 
+                text="Sending request...",
+                stream=sys.stderr,
+            ):
                 if json_dict is not None:
                     response = requests.post(
                         f"http://127.0.0.1:{self.port}{endpoint}",
@@ -63,11 +69,7 @@ class RequestHelper:
             log.error("Unexpected error making request: %s", e)
             sys.exit(1)
 
-        try:
-            return response.json()
-        except json.JSONDecodeError as e:
-            log.error("Malformed response: %s | Raw response: %s", e, response.text)
-            return
+        return response
 
 
 def auto_find_service_port() -> int | None:
