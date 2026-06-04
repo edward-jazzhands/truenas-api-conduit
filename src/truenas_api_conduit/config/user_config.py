@@ -141,7 +141,7 @@ class Config(BaseSettings):
     log_level: str = "warning"
     no_color: bool = Field(default=False, validation_alias="NO_COLOR")
     socket_port: int = 4567
-    service_address: str = "127.0.0.1"
+    service_address: str = "localhost"
 
     # computed_field decorator docs:
     # https://pydantic.dev/docs/validation/latest/concepts/fields/#the-computed_field-decorator
@@ -172,17 +172,55 @@ class Config(BaseSettings):
             raise ValueError(f"log_level must be one of {valid}, got {v!r}")
         return v.lower()
 
-    @field_validator("truenas_host")
+    @field_validator("truenas_host", mode="before")
     @classmethod
-    def validate_truenas_host(cls, v: str) -> str:
-        if v == "192.168.1.xxx:443":
+    def truenas_host_missing(cls, v: str) -> str:
+        if not v:
             raise ValueError(
-                "You need to set a value for your TrueNAS server's address. The default "
-                "in the config file is only for demonstration. You can set it in the config "
-                "file, as an environment variable (TRUENAS_HOST), or using the --truenas-host "
-                "option on the command line."
+                "You need to set a value for your TrueNAS server's address. You can set it in "
+                "the config file, as an environment variable (TRUENAS_HOST), or using the "
+                "--truenas-host option on the command line."
             )
         return v
+
+    @field_validator("truenas_host", mode="after")
+    @classmethod
+    def truenas_host_used_placeholder(cls, v: str) -> str:
+        if v == "192.168.1.xxx:443":
+            raise ValueError(
+                "You need to enter a value for your TrueNAS server's address. The value "
+                "which you enabled in the config file is only for demonstration. You can "
+                "also set it as an environment variable (TRUENAS_HOST), or using the "
+                "--truenas-host option on the command line."
+            )
+        return v
+
+    @field_validator("truenas_host", mode="after")
+    @classmethod
+    def truenas_host_clean_prefix(cls, v: str) -> str:
+        if v.startswith("http://"):
+            raise ValueError(
+                "You have entered an HTTP address for your TrueNAS server instead of an "
+                "HTTPS address. This is strictly forbidden, TrueNAS will delete your API "
+                "key if any attempt is made to do this (That's not my doing that's "
+                "just how TrueNAS works)."
+            )
+        if v.startswith("https://"):
+            return v.removeprefix("https://")
+        return v
+
+    @field_validator("api_key", mode="before")
+    @classmethod
+    def validate_api_key(cls, v: str) -> str:
+        if not v:
+            raise ValueError(
+                "You need to set a value for your TrueNAS API key. You can set it in "
+                "the config file, as an environment variable (TRUENAS_API_KEY), or using the "
+                "--api-key option on the command line."
+            )
+        return v
+
+
 
     # FOR REFERENCE: Example expanding a path:
     # @field_validator("local_storage_path", mode="before")

@@ -1,42 +1,108 @@
-# The address that you use to access the TrueNAS Web UI over HTTPS, without
-# the "https://" prefix. This MUST be the HTTPS address, not the HTTP address!
+# TrueNAS API Conduit Configuration (TOML Format)
+# ===================================================================
+# All settings below start commented out (with a #). 
+# To enable a setting, remove the # and modify the value for your setup.
+
+# Configuration precedence (Highest priority to lowest):
+#     1. CLI options            (Overrides everything else)
+#     2. Environment variables  (Overrides config file)
+#     3. Config file
+#     4. Default values         (Used if no other source is provided)
+
+# NOTE: Settings marked (REQUIRED) have no default value. If they are 
+# not supplied here, via an environment variable, or via the CLI, 
+# the program will fail to start and display a validation error.
+
+# -------------------------------------------------------------------
+
+# (REQUIRED) The address that you use to access the TrueNAS Web UI over HTTPS, 
+# without the "https://" prefix.
+# This MUST be the HTTPS address, not the HTTP address!
 # You MUST have HTTPS enabled on the TrueNAS Web UI to use the TrueNAS API.
 # If you use a port number you must include it, like "192.168.1.xxx:443".
-truenas_host = "192.168.1.xxx:443"
+#     Default: None
+#     Equivalent Environment Var: TRUENAS_HOST
+
+# truenas_host = "192.168.1.xxx:443"
+
+# -------------------------------------------------------------------
+
+# (REQUIRED) Your TrueNAS API key.
+# WARNING: Storing API keys in plain text can be a security risk.
+# Recommended to use the set-key command in the CLI (which utilizes your OS's 
+# secrets manager). Additionally you can set the environment variable, or 
+# use the --api-key option on the CLI. 
+#     Default: None
+#     Equivalent Environment Var: TRUENAS_API_KEY
+
+# api_key = "1234567890"
+
+# -------------------------------------------------------------------
 
 # The path to the TrueNAS certificate file. This is required if you use a
 # self-signed certificate. If you use a certificate signed by a trusted CA,
-# you can leave this blank. Alternatively, you can set validate_certs to False.
-# truenas_cert_path = "/path/to/cert.crt"
+# you can leave this blank. Alternatively, you can set validate_certs to false.
+#     Default: None
+#     Equivalent Environment Var: TRUENAS_CERT_PATH
 
-# Set this to True to skip certificate validation. This is not recommended, as its
-# better to use a self-signed certificate. However, this does allow you to use
-# this program without having a certificate on your machine. (Default: true)
+# truenas_cert_path = "/path/to/your/cert.crt"
+
+# -------------------------------------------------------------------
+
+# Set this to false to skip certificate validation. This is not recommended, as
+# it's better to use a self-signed certificate. However, this does allow you to
+# use this program without having a certificate on your machine.
+#     Default: true
+#     Equivalent Environment Var: TRUENAS_VALIDATE_CERTS
+
 # validate_certs = true
 
-# WARNING: Storing API keys in plain text is a security risk.
-# Recommended to use one of the other methods such as your OS's secrets manager,
-# or creating an environment variable called TRUENAS_API_KEY. See docs.
-# api_key = "1234567890"
+# -------------------------------------------------------------------
 
-# Setting log level to info or debug is equivalent to using the --verbose flag
-# on the CLI. -v = info, -vv = debug, -vvv = trace
-# Options: [critical, error, warning, info, debug, trace]  (Default: "warning")
+# Setting log level is equivalent to using the --verbose flag on the CLI.
+# -v = info, -vv = debug, -vvv = trace
+# Options: [critical, error, warning, info, debug, trace]
+#     Default: "warning"
+#     Equivalent Environment Var: TRUENAS_LOG_LEVEL
+
 # log_level = "warning"
 
+# -------------------------------------------------------------------
+
 # Set to true to disable color output. This is equivalent to using the
-# --no-color flag on the CLI.
-no_color = false
+# --no-color flag on the CLI. NOTE: this does not affect the help menus.
+# To disable color in the help menus, set the environment variable to anything.
+# This env var is a common convention and may affect other programs.
+#     Default: false
+#     Equivalent Environment Var: NO_COLOR
+
+# no_color = false
+
+# -------------------------------------------------------------------
 
 # The internal socket port for the TrueNAS API Conduit service. This is used
 # by the CLI to send requests to the service. It's arbitrary and you can
-# change it if you need to. (default: 4567)
+# change it if you need to.
+#     Default: 4567
+#     Equivalent Environment Var: TRUENAS_SOCKET_PORT
+
 # socket_port = 4567
 
-# The address which the service will serve the local HTTP REST server on.
-# (Default: "127.0.0.1" / "localhost")
-# service_address = "127.0.0.1"
+# -------------------------------------------------------------------
 
-# WARNING: This is only intended for future-proofing, in case the API route ever 
-# changes. This must match what TrueNAS currently uses. (Default: "/api/current")
+# The address which the service will serve the local HTTP REST server on.
+#     Default: "localhost"
+#     Equivalent Environment Var: TRUENAS_SERVICE_ADDRESS
+
+# service_address = "localhost"
+
+# -------------------------------------------------------------------
+
+# This is only intended for future-proofing, in case the API route ever 
+# changes. This must match what your TrueNAS server currently uses.
+#     Default: "/api/current"
+#     Equivalent Environment Var: TRUENAS_API_ROUTE
+
 # api_route = "/api/current"
+
+# -------------------------------------------------------------------
