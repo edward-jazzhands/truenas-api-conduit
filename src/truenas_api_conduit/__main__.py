@@ -168,7 +168,7 @@ config_commands = [
 
 help_commands = [
     "cheatsheet",
-    "api_reference",
+    "reference",
     "version",
     "help",
 ]
@@ -729,8 +729,30 @@ def cheatsheet(ctx: click.RichContext) -> None:
         "1000 is not in quotes so its treated as an int", style=desc_style, end_section=True
     )
 
+    table2 = Table(
+        style=Style(
+            color="green4",
+            bold=True,
+        ),
+        padding=(0, 2),
+    )
+
+    table2.add_column("Examples using curl (Change address/port as needed)")
+    # =============
+    table2.add_row("curl http://localhost:4567/status | jq ", style=command_style)
+    table2.add_row("Get service status and pipe results into jq", style=desc_style, end_section=True)
+    # =============
+    table2.add_row(r"""curl -X POST http://localhost:4567/rpc -H 'Content-Type: application/json' -d '{"method": "core.ping", "params": []}' """, style=command_style)
+    table2.add_row("Simple ping", style=desc_style, end_section=True)
+    # =============
+    table2.add_row(r"""curl -X POST http://localhost:4567/rpc -H 'Content-Type: application/json' -d '{"method": "disk.query", "params": [[["name", "=", "sda"]]]}' | jq """, style=command_style)
+    table2.add_row("Disk query with filter, results piped into jq", style=desc_style, end_section=True)
+    # =============
+
     ctx.console.print()
     ctx.console.print(table)
+    ctx.console.print()
+    ctx.console.print(table2)
 
 
 @cli.command()

@@ -13,8 +13,8 @@ console_stdout = Console(stderr=False)
 # Rich does not have a built-in setting for max width. So we allow it
 # to detect the terminal size automatically, then only change it to
 # the max width if its smaller than the terminal size.
-console_stderr.width = min(MAX_WIDTH, console_stderr.size.width)
-console_stdout.width = min(MAX_WIDTH, console_stdout.size.width)
+# console_stderr.width = min(MAX_WIDTH, console_stderr.size.width)
+# console_stdout.width = min(MAX_WIDTH, console_stdout.size.width)
 
 
 def set_no_color() -> None:
