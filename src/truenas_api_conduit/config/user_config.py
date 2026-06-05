@@ -3,7 +3,7 @@ from typing import Any
 import logging
 
 # third party
-from pydantic import field_validator, Field, computed_field
+from pydantic import field_validator, Field, SecretStr
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -17,7 +17,8 @@ from pydantic_settings import (
 from truenas_api_conduit import log_setup
 from truenas_api_conduit.console import set_no_color
 from truenas_api_conduit.core import CONFIG_PATH
-from truenas_api_conduit.config.keyring_source import KeyringSettingsSource
+from truenas_api_conduit.config.pydantic_sources import KeyringSettingsSource
+from truenas_api_conduit.app_globals import is_config_frozen
 
 __all__ = ["Config"]
 
@@ -27,7 +28,9 @@ if not CONFIG_PATH.exists():
     log.error("Config file not found, this is a runtime bug.")
     raise FileNotFoundError(f"Config file not found at {CONFIG_PATH}")
 
-
+# NOTE: i've chosen a plain dict instead of a dataclass or something here
+# because it means I don't need to worry about adding/removing fields,
+# it just stays 100% dynamic.
 _config_provenance: dict[str, Any] = {}
 
 
@@ -35,6 +38,9 @@ class TrackingSourceMixin:
     source_label: str
 
     def __call__(self) -> dict[str, Any]:
+        # Call intercepter - we're doing a super call, examining the return
+        # value, then returning that value as normal.
+
         # Recall, every source returns the dict of k/v pairs it provides
         data: dict[str, Any] = super().__call__()  # type: ignore
         for key in data:  #    ^^^^ super in a Mixin follows MRO
@@ -45,8 +51,8 @@ class TrackingSourceMixin:
         return data
 
 
-# Every new tracking source class maintains the constructor signature
-# of the original source class because we didn't override __init__
+# we didn't override __init__ so the construtors are the same on
+# all the tracking source classes
 
 
 class TrackingEnvSource(TrackingSourceMixin, EnvSettingsSource):
@@ -65,22 +71,12 @@ class TrackingKeyringSource(TrackingSourceMixin, KeyringSettingsSource):
     source_label = "keyring"
 
 
-class SecretStr(str):
-    "Will only print the first 10 chars of the secret during logging output"
-
-    def __repr__(self):
-        return f"'{self[:10]}...'"
-
-    def __str__(self):
-        return f"{self[:10]}..."
-
-
 class Config(BaseSettings):
     model_config = SettingsConfigDict(
         toml_file=CONFIG_PATH,
         env_file_encoding="utf-8",
         env_prefix="TRUENAS_",
-        frozen=False,
+        frozen=is_config_frozen,
         validate_by_name=True,  # <- This is the new and recommended way
         validate_by_alias=True,
         # populate_by_name=True, # ! Deprecated - Not recommended in v2.11+
@@ -109,9 +105,7 @@ class Config(BaseSettings):
         # 5. Config class defaults
         return (
             TrackingInitSource(settings_cls, init_settings.init_kwargs),
-            TrackingKeyringSource(
-                settings_cls, service="truenas", raise_on_missing_key=False
-            ),
+            TrackingKeyringSource(settings_cls, service="truenas-api-conduit"),
             TrackingEnvSource(settings_cls),
             TrackingTomlSource(settings_cls),
         )
@@ -136,7 +130,7 @@ class Config(BaseSettings):
         default=None, validation_alias="TRUENAS_CERT_PATH"
     )
     validate_certs: bool = True
-    api_key: SecretStr | str = Field(default=..., json_schema_extra={"keyring": True})
+    api_key: SecretStr = Field(default=..., json_schema_extra={"keyring": True})
     api_route: str = "/api/current"
     log_level: str = "warning"
     no_color: bool = Field(default=False, validation_alias="NO_COLOR")
@@ -148,6 +142,18 @@ class Config(BaseSettings):
 
     # Internal settings
 
+    # _user_password: str | None = PrivateAttr(default=None)
+
+    # @property
+    # def user_password(self) -> str | None:
+    #     return self._user_password
+
+    # @user_password.setter
+    # def user_password(self, v: str) -> None:
+    #     self._user_password = v
+
+    # NOTE: this is not a computed field because we don't want it to show up
+    # in the model dump. It's only used internally.
     @property
     def uri(self) -> str:
         return f"wss://{self.truenas_host}{self.api_route}"
@@ -177,9 +183,11 @@ class Config(BaseSettings):
     def truenas_host_missing(cls, v: str) -> str:
         if not v:
             raise ValueError(
-                "You need to set a value for your TrueNAS server's address. You can set it in "
-                "the config file, as an environment variable (TRUENAS_HOST), or using the "
-                "--truenas-host option on the command line."
+                "You need to set a value for your TrueNAS server's address. You can set "
+                "it in one of the following ways:\n"
+                "  1. In the config file\n"
+                "  2. As an environment variable (TRUENAS_HOST)\n"
+                "  3. Using the --truenas-host option on the command line."
             )
         return v
 
@@ -191,7 +199,7 @@ class Config(BaseSettings):
                 "You need to enter a value for your TrueNAS server's address. The value "
                 "which you enabled in the config file is only for demonstration. You can "
                 "also set it as an environment variable (TRUENAS_HOST), or using the "
-                "--truenas-host option on the command line."
+                "--truenas-host option in the CLI (see start --help)."
             )
         return v
 
@@ -214,9 +222,12 @@ class Config(BaseSettings):
     def validate_api_key(cls, v: str) -> str:
         if not v:
             raise ValueError(
-                "You need to set a value for your TrueNAS API key. You can set it in "
-                "the config file, as an environment variable (TRUENAS_API_KEY), or using the "
-                "--api-key option on the command line."
+                "You need to set a value for your TrueNAS API key. You can set "
+                "it in one of the following ways:\n"
+                "  1. Using the set-key command in the CLI\n"
+                "  2. Using the --api-key option in the CLI (see start --help)."
+                "  3. As an environment variable (TRUENAS_API_KEY)\n"
+                "  4. In the config file (least secure)\n"
             )
         return v
 

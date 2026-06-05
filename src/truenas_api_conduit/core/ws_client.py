@@ -5,7 +5,6 @@ import json
 import ssl
 from pathlib import Path
 import logging
-import json
 import sys
 import time
 
@@ -36,16 +35,17 @@ async def _get_websocket_conn(cfg: Config) -> client.WebSocketClientProtocol:
     if cfg.validate_certs and cfg.truenas_cert_path:
         cert_path_obj = Path(cfg.truenas_cert_path)
         ssl_context.load_verify_locations(cafile=cert_path_obj)
-        log.debug("Loaded certificate for validation")
+        log.info("Loaded certificate for validation")
     elif cfg.validate_certs:
-        log.debug(
-            "Validate certs but no cert provided, the cert must be from a trusted CA"
+        log.info(
+            "Validate certs but no cert provided. The server will need to have "
+            "a cert must be from a trusted CA for auth to work"
         )
         pass
     else:
         ssl_context.check_hostname = False  # must disable this first
         ssl_context.verify_mode = ssl.CERT_NONE
-        log.debug("Disabled certificate validation")
+        log.info("Disabled certificate validation")
 
     return await client.connect(cfg.uri, ssl=ssl_context)
 
@@ -88,7 +88,7 @@ class TrueNASClient:
             "ws_conn secure": self.ws_conn._secure,
             "truenas_cert_path": self.config.truenas_cert_path,
             "validate_certs": self.config.validate_certs,
-            "api_key": str(self.config.api_key),  # str() obfuscates the key
+            "api_key": self.config.api_key,
             "log_level": self.config.log_level,
             "no_color": self.config.no_color,
         }
@@ -145,7 +145,9 @@ class TrueNASClient:
 
         self.ws_conn = await _get_websocket_conn(self.config)
 
-        req = self.make_rpc_request("auth.login_with_api_key", [self.config.api_key])
+        req = self.make_rpc_request(
+            "auth.login_with_api_key", [self.config.api_key.get_secret_value()]
+        )
         await self.ws_conn.send(json.dumps(req))
 
         # We have to read from recv manually to ensure we're authenticated

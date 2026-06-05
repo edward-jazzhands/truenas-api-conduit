@@ -2,9 +2,14 @@
 from typing import Final
 from pathlib import Path
 
+# third party
+import platformdirs
+
+# project
 from truenas_api_conduit import APP_NAME
 from .detect_platform import detect
 from .setup_app_dir import ensure_config as _ensure_config
+from .setup_app_dir import ensure_storage_dir as _ensure_storage_dir
 from .global_enums import Platform, InstallType, Endpoints
 
 __all__ = [
@@ -17,15 +22,7 @@ __all__ = [
     "CONFIG_PATH",
 ]
 
-PLATFORM: Final = detect()
-
-CONFIG_DIR: Final = (
-    Path.home() / ".config" / APP_NAME
-    if PLATFORM == Platform.LINUX
-    else Path.home() / APP_NAME
-)
-
-CONFIG_PATH: Final = CONFIG_DIR / "settings.conf"
+PLATFORM: Final[Platform] = detect()
 
 # NOTE: It does not make sense to use platformdirs here because the config file
 # must be edited manually by the user. On Windows and MacOS, the conventional
@@ -37,6 +34,25 @@ CONFIG_PATH: Final = CONFIG_DIR / "settings.conf"
 # standard practice for cross-platform apps with a user-editable config file.
 # For Linux we follow the XDG Base Directory specification instead.
 
+CONFIG_DIR: Final[Path] = (
+    Path.home() / ".config" / APP_NAME
+    if PLATFORM == Platform.LINUX
+    else Path.home() / APP_NAME
+)
+
+CONFIG_PATH: Final[Path] = CONFIG_DIR / "settings.conf"
+
 
 def ensure_config() -> None:
     _ensure_config(CONFIG_DIR, CONFIG_PATH)
+
+
+# Now we actually do need to use platformdirs for the internal storage dir
+# On Windows this will be: C:\Users\<username>\AppData\Roaming\truenas-api-conduit
+# On MacOS: ~/Library/Application Support/truenas-api-conduit
+# On Linux: ~/.local/share/truenas-api-conduit
+STORAGE_DIR: Final[Path] = Path(platformdirs.user_data_dir(APP_NAME))
+
+
+def ensure_storage_dir() -> None:
+    _ensure_storage_dir(STORAGE_DIR)

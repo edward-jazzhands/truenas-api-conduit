@@ -25,7 +25,7 @@ from truenas_api_conduit.cli_helpers import (
     CLIOptions,
     logging_setup,
     config_setup,
-    usage_helper,
+    make_usage_error_panel,
 )
 from truenas_api_conduit.request_helper import get_request_helper
 
@@ -157,11 +157,11 @@ def request_options(f: Callable) -> Callable:
 verbose_help = f"""Sets the verbosity/logging level.
 [{COLORS['option']}]-v[/{COLORS['option']}] for info,
 [{COLORS['option']}]-vv[/{COLORS['option']}] for debug,
-[{COLORS['option']}]-vvv[/{COLORS['option']}] for trace"""
+[{COLORS['option']}]-vvv[/{COLORS['option']}] for trace
+[env:[{COLORS['envvar']}] TRUENAS_LOG_LEVEL[default]=]"""
 
-no_color_help = f"""Disables color output. You can also set the
-[{COLORS['envvar']}]NO_COLOR[/{COLORS['envvar']}] environment variable to fully
-disable color including the help menu"""
+no_color_help = f"""Disables color output. You must set the environment variable
+to fully disable color including the help menu [env:[{COLORS['envvar']}] NO_COLOR[default]=]"""
 
 
 # NOTE: When using click.group() as the main command, it will automatically show
@@ -243,32 +243,34 @@ def cli(ctx: click.RichContext) -> None:
     # be passed through so that the subcommand setup gets the full context.
 
 
-start_help = f"""Tell your OS to start the conduit service. You can also
-start the program directly as a standalone program without installing by using the
-[{COLORS['option']}]--standalone[/{COLORS['option']}] option, which runs in
-the foreground by default.\n
+start_help_short = f"""Tell your OS to start the conduit service
+([{COLORS['command']}]start --help[default] for more info)"""
+
+start_help = f"""Tell your OS to start the conduit service.\n
+You can also start the program directly as a standalone program without installing
+by using the [{COLORS['option']}]--standalone[/{COLORS['option']}] option, which
+runs in the foreground by default.\n
 Tip: to run standalone in the background, use:
-[{COLORS['command']}]truenas-api start --standalone & disown[/{COLORS['command']}]
+[{COLORS['command']}]truenas-api start --standalone & disown[default]
 (Mac + Linux) or
 [{COLORS['command']}]Start-Process truenas-api start
---standalone[/{COLORS['command']}] (Windows)"""
+--standalone[default] (Windows)"""
 
 standalone_help = """Start the service as a standalone program in the foreground (not
 run by your service manager). Does not require installation"""
 
 api_key_help = f"""Ask to be prompted for your TrueNAS API key. You can also use the
-[{COLORS['command']}]set-key[/{COLORS['command']}] command (recommended),
-set an environment variable named
-[{COLORS['envvar']}]TRUENAS_API_KEY[/{COLORS['envvar']}], or set the
-[{COLORS['envvar']}]api_key[/{COLORS['envvar']}] field in the config file"""
+[{COLORS['command']}]set-key[default] command (recommended), set the
+[{COLORS['envvar']}]api_key[default] field in the config file, or set the
+environment variable [env:[{COLORS['envvar']}] TRUENAS_API_KEY[default]=]"""
 
 truenas_host_help = f"""The address that you use to access the TrueNAS Web UI over
-HTTPS. You can also set the [{COLORS['envvar']}]truenas_host[/{COLORS['envvar']}]
-field in the config file, or set an environment variable named
-[{COLORS['envvar']}]TRUENAS_HOST[/{COLORS['envvar']}]"""
+HTTPS. You can also set the [{COLORS['envvar']}]truenas_host[default]
+field in the config file, or set the environment variable
+[env:[{COLORS['envvar']}] TRUENAS_HOST[default]=]"""
 
 
-@cli.command(help=start_help)
+@cli.command(help=start_help, short_help=start_help_short)
 @click.option("--standalone", is_flag=True, default=False, help=standalone_help)
 @click.option("--api-key", is_flag=True, default=None, help=api_key_help)
 @click.option("--truenas-host", help=truenas_host_help)
@@ -305,11 +307,18 @@ def start(
         # service.start(cfg)
 
 
+install_help_short = f"""Install the TrueNAS API Conduit service
+([{COLORS['command']}]install --help[default] for more info)"""
+
+install_help = """Install the TrueNAS API Conduit service.\n
+On Linux and MacOS, the default is to install as a user service and does not
+require elevation. On Windows, elevation is required to install"""
+
 system_help = """Install the service as a system service. This requires elevation"""
 package_help = """This is intended to be used by package managers"""
 
 
-@cli.command()
+@cli.command(help=install_help, short_help=install_help_short)
 @click.option("--system", "-s", is_flag=True, default=False, help=system_help)
 @click.option(
     "--package", "-p", is_flag=True, default=False, help=package_help, hidden=True
@@ -321,9 +330,6 @@ def install(
     system: bool = False,
     package: bool = False,
 ) -> None:
-    """Install the TrueNAS API Conduit service. On Linux and MacOS, the default
-    is to install as a user service and does not require elevation. On Windows,
-    elevation is required to install"""
 
     if system and package:
         raise click.UsageError("You cannot specify both --system and --package")
@@ -354,23 +360,26 @@ def uninstall(ctx: click.RichContext) -> None:
     assert ctx.console is not None
 
 
+request_help_short = f"""Make a request using the service. The service must be running
+([{COLORS['command']}]request --help[default] for more info)"""
+
 request_help = f"""Make a request using the service. The service must be running.\n
-Example: [{COLORS['command']}]truenas-api request system.info[/{COLORS['command']}]\n
-Use the [{COLORS['command']}]cheatsheet[/{COLORS['command']}] command to see a list
+Example: [{COLORS['command']}]truenas-api request system.info[default]\n
+Use the [{COLORS['command']}]cheatsheet[default] command to see a list
 of some common requests and examples of how to use them"""
 
 filters_help = f"""Add a filter to the request. Filters are in the form of
 'filter triplets' as defined by the TrueNAS API. Triplet format is
-[{COLORS['envvar']}]FIELD OPERATOR VALUE[/{COLORS['envvar']}]. For example:
+[{COLORS['envvar']}]FIELD OPERATOR VALUE[default]. For example:
 [{COLORS['option']}]--filter name = sda[/{COLORS['option']}]
 """
 
 pretty_help = f"""Format the JSON response to be human-readable. Alternatively
 you can pipe the response into
-[{COLORS['command']}]jq[/{COLORS['command']}] (can be faster)"""
+[{COLORS['command']}]jq[default] (can be faster)"""
 
 
-@cli.command(help=request_help)
+@cli.command(help=request_help, short_help=request_help_short)
 @click.argument("method", help="The method to call (ex: system.info)", required=True)
 @click.option("--params", "-p", help="The params to pass to the method")
 @click.option(
@@ -391,8 +400,6 @@ def request(
     params: str | None = None,
     filters: tuple[tuple[str, str, str], ...] = (),
 ) -> None:
-
-    from rich.panel import Panel
 
     logging_setup(ctx)
     assert ctx.console is not None
@@ -456,7 +463,7 @@ def request(
         """\n[default]Filters must be in the format of FIELD OPERATOR VALUE\n"""
         "Example: --filter name = sda\n"
         "See TrueNAS API reference for more info (Tip: use "
-        f"[{COLORS['command']}]truenas-api reference[/{COLORS['command']}] "
+        f"[{COLORS['command']}]truenas-api reference[default] "
         "to print the URL to the API reference on your server)\n"
     )
 
@@ -465,9 +472,11 @@ def request(
     )
     for f in filters_list:
         if len(f) != 3:
-            usage_helper(err_string)
+            console_stderr.print(make_usage_error_panel(err_string))
+            sys.exit(1)
         if f[1] not in supported_operators:
-            usage_helper(err_string)
+            console_stderr.print(make_usage_error_panel(err_string))
+            sys.exit(1)
         if f[2] in ("True", "true"):
             f[2] = True
         elif f[2] in ("False", "false"):
@@ -619,23 +628,70 @@ def status(ctx: click.RichContext) -> None:
         ctx.console.print(response.text, soft_wrap=True)
 
 
-@cli.command()
+set_key_help_short = f"""Set the API key using whatever compatible keyring/secrets manager
+is available on your system
+([{COLORS['command']}]set-key --help[default] for more info)"""
+
+set_key_help = f"""Set the API key using whatever compatible keyring/secrets manager
+is available on your system.\n
+If there is no keyring backend available (ie. you're running in some minimal or
+headless environment), the program will fall back to writing the API key to an
+encrypted file in your storage directory. If this happens, the program will
+look for the [{COLORS['envvar']}]TRUENAS_CRYPT_KEY[default] environment variable.
+If available, it will use that as the encryption key to avoid prompting you (thus
+making it possible to start the service through scripts/non-interactive environments).\n
+If this env var is NOT set, the program will prompt you for the encryption key
+when you run the
+[{COLORS['command']}]set-key[default] command, as well as every time the service
+starts up! This would be unsuitable for starting at boot or other such automations
+[env: [{COLORS['envvar']}]TRUENAS_CRYPT_KEY[default]=]
+"""
+
+
+@cli.command(help=set_key_help, short_help=set_key_help_short)
 @common_options
 @click.pass_context
 def set_key(ctx: click.RichContext) -> None:
-    """Set the API key using whatever compatible keyring/secrets manager is
-    available on your system"""
 
     logging_setup(ctx)
+    assert ctx.console is not None
 
     log.debug("Setting API key")
     import keyring
+    import keyring.errors
+    import keyring.backend
+    from truenas_api_conduit.config.keyring_backends import FileEncrypter
 
-    # TODO: Implement set API key
+    # my custom fallback file encrypter keyring backend. This is set to
+    # lowest priority (0.0) so that it should only be used if no other
+    # keyring backends are available.
+    keyring.set_keyring(FileEncrypter())
+
+    # all_keyrings will always contain 'fail Keyring' and 'chainer ChainerBackend'
+    # even if no other keyrings are present.
+    all_keyrings = keyring.backend.get_all_keyring()
+    log.debug(f"Available keyring backends: {[k.name for k in all_keyrings]}")
+
+    if len(all_keyrings) == 3:
+        log.warning(
+            "Using the fallback file encryption keyring backend. You may want to "
+            "set the TRUENAS_CRYPT_KEY environment variable to avoid being prompted "
+            "for an encryption key every time the service starts up."
+        )
+
+    api_key = click.prompt("Enter your TrueNAS API key", hide_input=True)
+
+    try:
+        keyring.set_password("truenas-api-conduit", "api_key", api_key)
+    except keyring.errors.KeyringError as e:
+        err_string = "[default]" + str(e)
+        ctx.console.print(make_usage_error_panel(err_string, "Keyring Error"))
+    except Exception as e:
+        log.error(f"Could not set API key in keyring: {type(e)} | {e}")
 
 
 config_help = f"""Attempts to open the config file in your editor, if
-[{COLORS['envvar']}]$EDITOR[/{COLORS['envvar']}] is set"""
+[env: [{COLORS['envvar']}]EDITOR[default]=] is set"""
 
 
 @cli.command(help=config_help)
@@ -650,14 +706,15 @@ def config() -> None:
             f"[default]No editor set. Set the [{COLORS['envvar']}]$EDITOR[default] "
             "environment variable"
         )
-        usage_helper(err_string)
+        console_stderr.print(make_usage_error_panel(err_string))
+        sys.exit(1)
 
 
 @cli.command()
 @common_options
 @click.pass_context
 def config_path(ctx: click.RichContext) -> None:
-    """Print the path to the config file (you can eval this)"""
+    """Print the path to the config file (you can pipe this)"""
 
     logging_setup(ctx)
     assert ctx.console is not None
@@ -672,14 +729,20 @@ def config_path(ctx: click.RichContext) -> None:
     )
 
 
-@cli.command()
+print_config_help_short = f"""Validate and output your current configuration as
+JSON to stdout
+([{COLORS['command']}]print_config --help[default] for more info)"""
+
+print_config_help = """Validate and output your current configuration as JSON to
+stdout. This can be saved and passed in to the service's stdin to start it.
+Logging/debug is separated out to stderr. Warning: This will output
+your full API key in plain text"""
+
+
+@cli.command(help=print_config_help, short_help=print_config_help_short)
 @common_options
 @click.pass_context
 def print_config(ctx: click.RichContext) -> None:
-    """Validate and output your current configuration as JSON to stdout.
-    This can be saved and passed in to the service's stdin to start it.
-    Logging/debug is separated out to stderr. Warning: This will output
-    your full API key in plain text"""
 
     logging_setup(ctx)
     assert ctx.console is not None
@@ -714,7 +777,7 @@ def cheatsheet(ctx: click.RichContext) -> None:
         "and format the results\n\n"
         "  Read the TrueNAS API reference for a full list of all available "
         "methods and their parameters\n",
-        f" Tip: use the [{COLORS['command']}]reference[/{COLORS['command']}] command "
+        f" Tip: use the [{COLORS['command']}]reference[default] command "
         "to print the URL to the API reference on your server\n",
         style="italic",
     )
@@ -765,12 +828,38 @@ def help(ctx: click.RichContext) -> None:
 def completions(ctx: click.RichContext) -> None:
     "Print the commands to enable tab completions in your shell (you can eval this)"
 
+    #! consider changing to this:
+    # truenas-api bash | sudo tee /usr/share/bash-completion/completions/truenas-api
+    # truenas-api zsh | sudo tee /usr/share/zsh/site-functions/_truenas-api
+    # truenas-api tcsh | sudo tee /etc/profile.d/truenas-api.csh
+
+    # FIXME: This is probably not guaranteed to work on all platforms
+
     assert ctx.console is not None
     ctx.console.no_color = True
-    ctx.console.print('eval "$(_TRUENAS_API_COMPLETE=bash_source truenas-api)";')
-    ctx.console.print('eval "$(_TRUENAS_API_CONDUIT_COMPLETE=bash_source truenas-api)";')
+
+    command = "bash_source"
+    eval_template1 = 'eval "$(_TRUENAS_API_COMPLETE={command} truenas-api)"'
+    eval_template2 = (
+        'eval "$(_TRUENAS_API_CONDUIT_COMPLETE={command} truenas-api-conduit)"'
+    )
+
+    if shell_env := os.environ.get("SHELL"):
+        shell = shell_env.split("/")[-1]
+        if shell == "zsh":
+            command = "zsh_source"
+        elif shell == "fish":
+            command = "source"
+            eval_template1 = "_TRUENAS_API_COMPLETE={command} truenas-api | source"
+            eval_template2 = (
+                "_TRUENAS_API_CONDUIT_COMPLETE={command} truenas-api-conduit | source"
+            )
+
+    ctx.console.print(eval_template1.format(command=command))
+    ctx.console.print(eval_template2.format(command=command))
+
     console_stderr.print(
         f"[italic]Tip: You can eval this command to enable tab completions:[/italic]"
-        f'''  [{COLORS['command']}]eval "$(truenas-api completions)"''',
+        f"""  [{COLORS['command']}]eval $(truenas-api completions)""",
         markup=True,
     )

@@ -6,8 +6,8 @@ from rich.logging import RichHandler
 from truenas_api_conduit.console import console_stderr
 from truenas_api_conduit.constants import APP_NAME
 
-TRACE: Final = 5
-PACKAGE_NAME: Final = APP_NAME.replace("-", "_")
+TRACE: Final[int] = 5
+PACKAGE_NAME: Final[str] = APP_NAME.replace("-", "_")
 
 
 class TraceLogger(logging.Logger):

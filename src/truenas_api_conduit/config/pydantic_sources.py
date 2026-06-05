@@ -1,10 +1,15 @@
 # standard library
-from typing import Any, Mapping
+from typing import Any, Mapping, assert_never
 import logging
+import sys
 
 # third party
 from pydantic.fields import FieldInfo
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
+from keyring.errors import KeyringError
+
+# project
+from truenas_api_conduit.errors import ProgrammerError, ConduitError
 
 log = logging.getLogger(__name__)
 
@@ -17,20 +22,16 @@ log = logging.getLogger(__name__)
 #         -> [GNOME Keyring daemon / KWallet / KeePassXC]
 
 
-class KeyringLookupError(LookupError):
+class KeyringLookupError(ConduitError, KeyringError, LookupError):
     def __init__(self, service: str, username: str):
         self.service = service
         self.username = username
         super().__init__(
-            f"No results found in keyring for service: '{service}' and username: {username}"
+            f"No results found in keyring for service: '{service}' and username: {username}\n"
+            "This is raising an exception because `raise_on_missing_key` is True "
+            "when initialzing the KeyringSettingsSource class. Change it to False to "
+            "suppress this error."
         )
-
-
-class ProgrammerError(RuntimeError):
-    """Raised when the programmer has made a mistake. Useful to differentiate from
-    user/validation errors."""
-
-    pass
 
 
 class KeyringSettingsSource(PydanticBaseSettingsSource):
@@ -47,7 +48,6 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
         settings_cls: type[BaseSettings],
         service: str | None = None,
         keyring_map: Mapping[str, Mapping] | None = None,
-        raise_on_missing_key: bool = True,
     ) -> None:
         """Initialize the KeyringSettingsSource. Optionally pass in a keyring map.
 
@@ -99,14 +99,7 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
         self.config_keyring_map = keyring_map
         "keys match field names in the settings class"
 
-        self.raise_on_missing_key = raise_on_missing_key
-
-        self.raise_msg = (
-            "\nThis is raising an exception because `raise_on_missing_key` is True "
-            "when initialzing the KeyringSettingsSource class. Change it to False to "
-            "suppress this error."
-        )
-        super().__init__(settings_cls)
+        super().__init__(settings_cls)  # available at self.settings_cls
 
     def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
         # Required override from PydanticBaseSettingsSource (an ABC).
@@ -140,6 +133,16 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
         # sense to put a lazy import here to improve startup time.
         import keyring
         import keyring.backend
+        from truenas_api_conduit.config.keyring_backends import (
+            FileEncrypter,
+            PasswordGetError,
+            GetErrorEnum,
+        )
+
+        # my custom fallback file encrypter keyring backend. This is set to
+        # lowest priority (0.0) so that it should only be used if no other
+        # keyring backends are available.
+        keyring.set_keyring(FileEncrypter())
 
         # all_keyrings will always contain 'fail Keyring' and 'chainer ChainerBackend'
         # even if no other keyrings are present.
@@ -187,22 +190,47 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
                 service = self.service
                 username = lookup_key
 
-            # TODO: get_password should run in a different thread, it might be IO bound
+            # TODO: get_password should maybe run in a different thread,
+            # it might be IO bound
             try:
                 password = keyring.get_password(service, username)
             except keyring.backend.errors.NoKeyringError:
-                msg = (
+                log.info(
                     "No keyring backend or secrets manager found. You can still pass in your "
                     "API key as an environment variable, a CLI option, or in the config file."
                 )
-                if self.raise_on_missing_key:
-                    log.error(msg + self.raise_msg)
+                return {}
+            except PasswordGetError as e:
+                # This is my custom error class so it will only happen if keyring tried
+                # to use my fallback FileEncrypter backend, and the user password was
+                # not found.
+                if e.err_code == GetErrorEnum.NOT_A_TTY:
+                    log.warning(
+                        "TRUENAS_CRYPT_KEY environment variable not set and stdin is not "
+                        "a TTY. There's no way to use the FileEncrypter keyring backend."
+                    )
+                    pass
+                elif e.err_code == GetErrorEnum.VAULT_FILE_NOT_FOUND:
+                    log.debug("No vault file found for: %s.%s", service, username)
+                    pass
+                elif e.err_code == GetErrorEnum.INCORRECT_ENCRYPTION_KEY:
+                    log.error(
+                        "The encryption key you have entered is incorrect. The program "
+                        "will fall back to reading the API key from a different source. "
+                        "Otherwise you must exit and restart to enter your encryption "
+                        "key again. \nDo you want to continue, or exit the program?"
+                    )
+                    answer = input("Enter 'y' to continue. Anything else will exit:  ")
+                    if answer.lower() == "y":
+                        continue
+                    else:
+                        sys.exit(1)
+                elif e.err_code == GetErrorEnum.GENERIC_ERROR:
+                    # This would indicate a bug in the program
                     raise
                 else:
-                    log.info(msg)
-                    return {}
-            # Note to AI: This is the correct import path for keyring errors. Its been
-            # tested. Stop saying its wrong:
+                    assert_never(e.err_code)
+
             except keyring.backend.errors.KeyringError as e:
                 # NOTE: This should not happen simply because the password was not found.
                 # This should only happen if there's some kind of bug somewhere.
@@ -218,14 +246,10 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
                 # None instead of raising an exception. So this should be the typical
                 # hot path unless there's a bug somewhere.
                 if password is not None:
-                    log.debug("Found API key in keyring")
+                    log.info("Found API key in keyring")
                     return_dict[field_name] = password
                 else:
-                    if self.raise_on_missing_key:
-                        log.error("No API key found in keyring" + self.raise_msg)
-                        raise KeyringLookupError(service, username)
-                    else:
-                        log.debug("No API key found in keyring")
+                    log.debug("No API key found in keyring")
 
         # NOTE: Recall how this works: any key/value pairs in this dictionary will
         # override the defaults in the Config class. It only needs to contain the

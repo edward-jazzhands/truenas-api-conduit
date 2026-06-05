@@ -3,17 +3,24 @@ import json
 import os
 import sys
 import logging
-import json
-import sys
+
+# import json
+# import sys
 import signal
 import asyncio
-from enum import StrEnum
+
+# from enum import StrEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # ws_client contains the import for the websockets library so we gain
     # a little bit by making it a lazy import when its needed.
     from truenas_api_conduit.core.ws_client import TrueNASClient
+
+    # This module will look at the is_config_frozen global to determine if
+    # the config is frozen. As such we need to defer importing it until
+    # we've had a chance to set that global.
+    from truenas_api_conduit.config import Config
 
 # third party
 import pydantic
@@ -24,7 +31,6 @@ from aiohttp.web_runner import GracefulExit
 from truenas_api_conduit import LOCK_FILE, APP_NAME
 from truenas_api_conduit.console import console_stderr
 import truenas_api_conduit.log_setup as log_setup
-from truenas_api_conduit.config import Config
 
 
 def handle_exit(*_):
@@ -116,6 +122,7 @@ async def restart(request: web.Request) -> web.Response:
 async def start_truenas(app: web.Application) -> None:
 
     from truenas_api_conduit.core.ws_client import TrueNASClient
+    from truenas_api_conduit.config import Config
 
     cfg = app["config"]
     assert isinstance(cfg, Config)
@@ -183,11 +190,21 @@ async def main(cfg: Config) -> None:
 
 def start():
 
+    # NOTE: on the CLI side I allow the model to not be frozen. The CLI
+    # can modify some settings in the config while it's building it.
+    # But once it comes time to run the program, I freeze the config.
+    # This is basically just security hygiene, makes it harder for a
+    # hypothetical hacker to modify the config while the service is running.
+    from truenas_api_conduit.app_globals import set_config_frozen
+
+    set_config_frozen()
+
     nc_env = os.environ.get("NO_COLOR")
     if nc_env is not None:
         console_stderr.no_color = True
 
-    # recall the Config class is a pydantic-settings model from the config submodule.
+    # recall the Config class is a pydantic-settings model
+    from truenas_api_conduit.config import Config
 
     source: str = ""
     try:

@@ -2,7 +2,6 @@
 import sys
 import logging
 import os
-import json
 from typing import Any, TYPE_CHECKING
 from dataclasses import dataclass
 
@@ -45,11 +44,8 @@ class CLIOptions:
     pretty: bool | None = None
 
 
-def usage_helper(err_string: str):
-
-    panel = Panel(err_string, title="Usage Error", title_align="left", style="bright_red")
-    console_stderr.print(panel)
-    sys.exit(1)
+def make_usage_error_panel(err_string: str, title: str = "Usage Error") -> Panel:
+    return Panel(err_string, title=title, title_align="left", style="bright_red")
 
 
 def logging_setup(ctx: click.RichContext) -> None:
@@ -105,12 +101,12 @@ def config_setup(cli_options: CLIOptions) -> Config:
     # NOTE: Remember that the config file/dir must be ensured before trying to
     # import the user_config module:
     core.ensure_config()  # Raises if failure
+    core.ensure_storage_dir()
 
     # Pydantic will not be loaded until this following import. Its one
     # of the heavier dependencies so this improves startup time.
     from truenas_api_conduit.config import Config
     from pydantic import ValidationError  # .config already imports pydantic
-    from rich.panel import Panel
     import tomllib
 
     try:
@@ -119,16 +115,9 @@ def config_setup(cli_options: CLIOptions) -> Config:
         errs = e.errors()
         err_string = "[default]The following errors were found in your configuration:"
         for err in errs:
-            err_string += f"\n    [yellow]{err['loc'][0]}[/yellow] is {err['type']}:  "
+            err_string += f"\n    [yellow]{err['loc'][0]}[default] is {err['type']}:  "
             err_string += f"[bright_red]{err['msg']}"
-        console_stderr.print(
-            Panel(
-                err_string,
-                title="Configuration Errors",
-                style="red",
-                title_align="left",
-            )
-        )
+        console_stderr.print(make_usage_error_panel(err_string, "Configuration Errors"))
         sys.exit(1)
     except tomllib.TOMLDecodeError as e:
         _toml_decoding_error_panel(e)
@@ -138,7 +127,7 @@ def config_setup(cli_options: CLIOptions) -> Config:
             raise
         elif log_level <= log_mapping["DEBUG"]:
             log.exception(
-                f"Could not initialize config. Raise level to -vvv (trace) "
+                "Could not initialize config. Raise level to -vvv (trace) "
                 "to see the full traceback."
             )
             sys.exit(1)
@@ -148,7 +137,7 @@ def config_setup(cli_options: CLIOptions) -> Config:
                 f"    {e} ({e.__class__.__qualname__})\n\n"
                 "Raise the verbosity to see more information."
             )
-            console_stderr.print(Panel(err_string, style="red"))
+            console_stderr.print(make_usage_error_panel(err_string))
             sys.exit(1)
 
     log.info("Config loaded successfully")
@@ -161,8 +150,6 @@ def config_setup(cli_options: CLIOptions) -> Config:
 
 
 def _toml_decoding_error_panel(e: tomllib.TOMLDecodeError) -> None:
-
-    from rich.panel import Panel
 
     err_string = (
         "[default]Your config file could not be parsed due to a TOML syntax error "
@@ -177,9 +164,9 @@ def _toml_decoding_error_panel(e: tomllib.TOMLDecodeError) -> None:
 
         if current_line == e.lineno:
             is_bad_line = True
-            err_string += f">>> "
+            err_string += ">>> "
         else:
-            err_string += f"    "
+            err_string += "    "
         if current_line <= 9:
             err_string += " "
 
@@ -200,12 +187,12 @@ def _toml_decoding_error_panel(e: tomllib.TOMLDecodeError) -> None:
             err_string += f"\nYou used '{word}' with a capital {word[0]}. "
             err_string += f"This must be lowercase like '{word.lower()}'.\n"
     if bad_line.count('"') == 1:
-        err_string += f'\nOnly found one doublequote(") mark in the line. '
-        err_string += f"Did you forget to close it?\n"
+        err_string += '\nOnly found one doublequote(") mark in the line. '
+        err_string += "Did you forget to close it?\n"
     if bad_line.count("'") == 1:
-        err_string += f"\nOnly found one singlequote(') mark in the line. "
-        err_string += f"Did you forget to close it?\n"
+        err_string += "\nOnly found one singlequote(') mark in the line. "
+        err_string += "Did you forget to close it?\n"
     if bad_line.count("'") == 0 and bad_line.count('"') == 0:
         err_string += "\nTip: does it need to be enclosed in quotes?\n"
 
-    console_stderr.print(Panel(err_string, style="red"))
+    console_stderr.print(make_usage_error_panel(err_string))
