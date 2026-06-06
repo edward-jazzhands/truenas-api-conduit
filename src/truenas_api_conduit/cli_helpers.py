@@ -15,6 +15,7 @@ from rich.panel import Panel
 
 # project
 from truenas_api_conduit import log_setup
+from truenas_api_conduit.constants import COLORS
 import truenas_api_conduit.core as core
 from truenas_api_conduit.console import console_stderr, set_no_color
 
@@ -75,6 +76,25 @@ def logging_setup(ctx: click.RichContext) -> None:
     log_setup.set_log_level(log_level)
 
 
+field_help_dict = {
+    "api_key": (
+        "\n\n[default]You need to set a value for your TrueNAS API key. You can set "
+        "it in one of the following ways:\n"
+        f"  1. Using the [{COLORS.command}]set-key[default] command in the CLI\n"
+        f"  2. Using the [{COLORS.command}]--api-key[default] option in the CLI (see start --help)\n"
+        f"  3. As an environment variable [env: [{COLORS.envvar}]TRUENAS_API_KEY[default]=]\n"
+        "  4. In the config file (least secure)"
+    ),
+    "truenas_host": (
+        "\n\n[default]You need to set a value for your TrueNAS server's address. You "
+        "can set it in one of the following ways:\n"
+        "  1. In the config file\n"
+        f"  2. As an environment variable [env: [{COLORS.envvar}]TRUENAS_HOST[default]=]\n"
+        f"  3. Using the [{COLORS.command}]--truenas-host[default] option in the CLI (see start --help)"
+    ),
+}
+
+
 def config_setup(cli_options: CLIOptions) -> Config:
 
     log_level: int = logging.getLogger().level
@@ -109,14 +129,23 @@ def config_setup(cli_options: CLIOptions) -> Config:
     from pydantic import ValidationError  # .config already imports pydantic
     import tomllib
 
+    fields_with_errors: list[str | int] = []
+
     try:
         cfg = Config(**args_dict)
     except ValidationError as e:
         errs = e.errors()
         err_string = "[default]The following errors were found in your configuration:"
         for err in errs:
-            err_string += f"\n    [yellow]{err['loc'][0]}[default] is {err['type']}:  "
+            field_name = err["loc"][0]
+            if isinstance(field_name, str):
+                field_name = field_name.lower()
+            fields_with_errors.append(field_name)
+            err_string += f"\n    [yellow]{field_name}[default] is {err['type']}:  "
             err_string += f"[bright_red]{err['msg']}"
+        for field_name in fields_with_errors:
+            if field_name in field_help_dict:
+                err_string += field_help_dict[field_name]
         console_stderr.print(make_usage_error_panel(err_string, "Configuration Errors"))
         sys.exit(1)
     except tomllib.TOMLDecodeError as e:

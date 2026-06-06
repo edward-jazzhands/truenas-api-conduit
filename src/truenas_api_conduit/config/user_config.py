@@ -3,7 +3,13 @@ from typing import Any
 import logging
 
 # third party
-from pydantic import field_validator, Field, SecretStr
+from pydantic import (
+    field_validator,
+    field_serializer,
+    Field,
+    SecretStr,
+    FieldSerializationInfo,
+)
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
@@ -165,10 +171,11 @@ class Config(BaseSettings):
     # field_validator decorator docs:
     # https://pydantic.dev/docs/validation/latest/concepts/validators/#json-schema-and-field-validators
 
-    @field_validator("api_key", mode="before")
-    @classmethod
-    def coerce_secret(cls, v):
-        return SecretStr(v)
+    @field_serializer("api_key")
+    def serialize_api_key(self, secret: SecretStr, info: FieldSerializationInfo):
+        if info.context and info.context.get("unmask") is True:
+            return secret.get_secret_value()
+        return secret
 
     @field_validator("log_level")
     @classmethod
@@ -186,7 +193,7 @@ class Config(BaseSettings):
                 "You need to set a value for your TrueNAS server's address. You can set "
                 "it in one of the following ways:\n"
                 "  1. In the config file\n"
-                "  2. As an environment variable (TRUENAS_HOST)\n"
+                "  2. As an environment variable [env: TRUENAS_HOST=]\n"
                 "  3. Using the --truenas-host option on the command line."
             )
         return v
@@ -226,7 +233,7 @@ class Config(BaseSettings):
                 "it in one of the following ways:\n"
                 "  1. Using the set-key command in the CLI\n"
                 "  2. Using the --api-key option in the CLI (see start --help)."
-                "  3. As an environment variable (TRUENAS_API_KEY)\n"
+                "  3. As an environment variable [env: TRUENAS_API_KEY=]\n"
                 "  4. In the config file (least secure)\n"
             )
         return v

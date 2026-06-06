@@ -88,7 +88,7 @@ class TrueNASClient:
             "ws_conn secure": self.ws_conn._secure,
             "truenas_cert_path": self.config.truenas_cert_path,
             "validate_certs": self.config.validate_certs,
-            "api_key": self.config.api_key,
+            "api_key": str(self.config.api_key),
             "log_level": self.config.log_level,
             "no_color": self.config.no_color,
         }

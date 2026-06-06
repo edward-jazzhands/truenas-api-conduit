@@ -20,12 +20,12 @@ from cryptography.hazmat.primitives import hashes
 from truenas_api_conduit.errors import ConduitError
 from truenas_api_conduit.core import STORAGE_DIR
 from truenas_api_conduit.console import console_stderr
+from truenas_api_conduit.constants import COLORS
 
 SECRETS_DIR: Final[Path] = STORAGE_DIR / "secrets"
-SALT_FILE: Final[Path] = SECRETS_DIR / "salt"
 
 __all__ = [
-    "KeyringEncrypter",
+    "FileEncrypter",
     "PasswordGetError",
     "GetErrorEnum",
 ]
@@ -35,6 +35,7 @@ log = logging.getLogger(__name__)
 
 class GetErrorEnum(Enum):
     VAULT_FILE_NOT_FOUND = 1
+    SALT_FILE_NOT_FOUND = 2
     INCORRECT_ENCRYPTION_KEY = 2
     GENERIC_ERROR = 3
     NOT_A_TTY = 4
@@ -61,12 +62,18 @@ class NotATTYError(KeyringError, ConduitError):
     pass
 
 
-class SafePath(Path):
-    service: str
-    username: str
-
-
 class FileEncrypter(KeyringBackend):
+
+    def __init__(self):
+        self.help_message_shown: bool = False
+        self.help_message = (
+            "Using the file encrypter keyring backend. This is selected when "
+            "there is no other keyring backend available. You will be prompted "
+            "to enter an encryption key to store and retrieve your API key.\n"
+            f"You can also set the [{COLORS.envvar}]TRUENAS_CRYPT_KEY[default] environment "
+            "variable to avoid this prompt."
+        )
+        super().__init__()
 
     @properties.classproperty
     def priority(cls):
@@ -77,7 +84,6 @@ class FileEncrypter(KeyringBackend):
     def set_password(self, service: str, username: str, password: str):
 
         SECRETS_DIR.mkdir(parents=True, exist_ok=True)
-        self._ensure_salt_file()
 
         # NOTE: The 'one key per file' system:
         # this works basically the same as storing all the passwords in a single
@@ -88,12 +94,14 @@ class FileEncrypter(KeyringBackend):
         # We intentionally do not check whether the file exists already. The
         # expected behavior of a keyring backend is to silently overwrite any
         # existing passwords.
-        vault_file: SafePath = self._get_vault_file(service, username)
+        vault_file: Path = self._get_vault_file(service, username)
+        salt_file = vault_file.with_suffix(".salt")
+        self._ensure_salt_file(salt_file)
 
         # Derive the encryption key from the user's password + salt, then hand it
         # to Fernet which handles the actual AES encryption and HMAC authentication.
         try:
-            f = Fernet(self._derive_key(SALT_FILE.read_bytes(), vault_file))
+            f = Fernet(self._derive_key(salt_file.read_bytes(), service, username))
             # Each call to Fernet.encrypt() generates a new random initialization vector
             vault_file.write_bytes(f.encrypt(password.encode()))
             vault_file.chmod(0o600)
@@ -103,14 +111,18 @@ class FileEncrypter(KeyringBackend):
 
     def get_password(self, service: str, username: str) -> str | None:
 
-        vault_file: SafePath = self._get_vault_file(service, username)
+        vault_file: Path = self._get_vault_file(service, username)
+        salt_file = vault_file.with_suffix(".salt")
 
         if not vault_file.exists():
             raise PasswordGetError(err_code=GetErrorEnum.VAULT_FILE_NOT_FOUND)
+        else:
+            if not salt_file.exists():
+                raise PasswordGetError(err_code=GetErrorEnum.SALT_FILE_NOT_FOUND)
 
         # Use password + salt file to reproduce the Fernet
         try:
-            f = Fernet(self._derive_key(SALT_FILE.read_bytes(), vault_file))
+            f = Fernet(self._derive_key(salt_file.read_bytes(), service, username))
             return f.decrypt(vault_file.read_bytes()).decode()
         except InvalidToken as e:
             raise PasswordGetError(err_code=GetErrorEnum.INCORRECT_ENCRYPTION_KEY) from e
@@ -122,22 +134,23 @@ class FileEncrypter(KeyringBackend):
 
     def delete_password(self, service: str, username: str):
 
-        vault_file: SafePath = self._get_vault_file(service, username)
+        vault_file: Path = self._get_vault_file(service, username)
+        salt_file = vault_file.with_suffix(".salt")
 
-        # The one key/one file system makes things easy here, we just delete the file
+        # The one key/one file system makes things easy here, we just delete the files
         if vault_file.exists():
             try:
-                vault_file.unlink()
+                vault_file.unlink(missing_ok=True)
+                salt_file.unlink(missing_ok=True)
             except Exception as e:
                 log.error("Could not delete password from keyring: %s", e)
                 raise PasswordDeleteError(
                     f"Could not delete password from keyring: {e}"
                 ) from e
         else:
-            raise PasswordDeleteError("Vault file does not exist. Nothing to delete.")
+            raise PasswordDeleteError("Nothing to delete.")
 
-    @staticmethod
-    def _derive_key(salt: bytes, vault_file: SafePath) -> bytes:
+    def _derive_key(self, salt: bytes, service: str, username: str) -> bytes:
 
         # PBKDF2 runs the password through SHA256 thousands of times (480,000 iterations here).
         # The point of this is to make brute-forcing expensive -- each guess requires
@@ -153,39 +166,44 @@ class FileEncrypter(KeyringBackend):
         crypt_key = os.environ.get("TRUENAS_CRYPT_KEY")
         if crypt_key is None:
             if sys.stdin.isatty():
+                if not self.help_message_shown:
+                    console_stderr.print(self.help_message)
+                    self.help_message_shown = True
                 console_stderr.print(
-                    "Using the file encrypter keyring backend. This is selected when "
-                    "there is no other keyring backend available.\n"
-                    "Enter your user password to use as the encryption key for secret: "
-                    f"[orange1]{vault_file.service}.{vault_file.username}[default]\n"
-                    "(NOTE: This is not your TrueNAS API key, it's a separate password. "
-                    "You can also set the [orange1]TRUENAS_CRYPT_KEY[default] environment "
-                    "variable to avoid this prompt)."
+                    "Enter an encryption key for secret: "
+                    f"[{COLORS.envvar}]{service}.{username}[default]\n"
                 )
                 crypt_key = getpass.getpass(stream=sys.stderr)
+
+                # NOTE: This implementation will ask for the encryption key for every
+                # secret that is retrieved from it. This is not ideal, but it allows
+                # me to avoid storing the key in memory. In the case of this program,
+                # there's just the one secret, so it's not a big deal. But if I use
+                # this to store multiple secrets for something in the future, this
+                # could get annoying.
             else:
                 raise NotATTYError("No env var set and stdin is not a TTY")
         else:
             log.info("Using TRUENAS_CRYPT_KEY environment variable")
 
         safebytes = base64.urlsafe_b64encode(kdf.derive(crypt_key.encode()))
-        del crypt_key
+        del crypt_key  #  so its not stored in memory
         return safebytes
 
     @staticmethod
-    def _ensure_salt_file() -> None:
+    def _ensure_salt_file(salt_file: Path) -> None:
 
-        # The salt is generated once per installation and reused across all operations.
+        # The salt is generated once for every new secret added to the keyring.
         # It does not need to be secret, its only job is to be unique so that the same
         # password produces a different derived key on each machine.
-        if not SALT_FILE.exists():
-            tmp = SALT_FILE.with_suffix(".tmp")
+        if not salt_file.exists():
+            tmp = salt_file.with_suffix(".tmp")
             tmp.write_bytes(os.urandom(16))
-            tmp.replace(SALT_FILE)
-            SALT_FILE.chmod(0o600)
+            tmp.replace(salt_file)
+            salt_file.chmod(0o600)
 
     @staticmethod
-    def _get_vault_file(service: str, username: str) -> SafePath:
+    def _get_vault_file(service: str, username: str) -> Path:
         """encode the service and username so it can't contain slashes or
         break the filesystem"""
 
@@ -194,10 +212,4 @@ class FileEncrypter(KeyringBackend):
         # bytes back into text so you can use it as a standard file name. This is often
         # referred to as the "byte sandwich" pattern
         safe_name = base64.urlsafe_b64encode(f"{service}::{username}".encode()).decode()
-
-        # This SafePath class just lets me store the service and username on the
-        # path object so I can print it later for the user.
-        safe_path = SafePath(SECRETS_DIR / safe_name)
-        safe_path.service = service
-        safe_path.username = username
-        return safe_path
+        return SECRETS_DIR / safe_name

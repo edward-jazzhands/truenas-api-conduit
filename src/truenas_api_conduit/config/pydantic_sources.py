@@ -10,6 +10,7 @@ from keyring.errors import KeyringError
 
 # project
 from truenas_api_conduit.errors import ProgrammerError, ConduitError
+from truenas_api_conduit.console import console_stderr
 
 log = logging.getLogger(__name__)
 
@@ -149,6 +150,9 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
         all_keyrings = keyring.backend.get_all_keyring()
         log.debug(f"keyring backends: {[k.name for k in all_keyrings]}")
 
+        current_backend = keyring.get_keyring()
+        log.debug(f"Current keyring backend: {current_backend.name}")
+
         return_dict: dict[str, Any] = {}
 
         for field_name, field_info in self.settings_cls.model_fields.items():
@@ -213,8 +217,19 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
                 elif e.err_code == GetErrorEnum.VAULT_FILE_NOT_FOUND:
                     log.debug("No vault file found for: %s.%s", service, username)
                     pass
+                elif e.err_code == GetErrorEnum.SALT_FILE_NOT_FOUND:
+                    console_stderr.print(
+                        f"No salt file found for: {service}.{username} -- the key is not "
+                        "retrievable. Please delete the key and set it again."
+                        "\nDo you want to continue, or exit the program?",
+                    )
+                    answer = input("Enter 'y' to continue. Anything else will exit:  ")
+                    if answer.lower() == "y":
+                        continue
+                    else:
+                        sys.exit(1)
                 elif e.err_code == GetErrorEnum.INCORRECT_ENCRYPTION_KEY:
-                    log.error(
+                    console_stderr.print(
                         "The encryption key you have entered is incorrect. The program "
                         "will fall back to reading the API key from a different source. "
                         "Otherwise you must exit and restart to enter your encryption "

@@ -1,6 +1,7 @@
 from typing import Final
 from importlib.metadata import version
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 APP_NAME: Final[str] = "truenas-api-conduit"
@@ -13,3 +14,10 @@ LOCK_FILE: Final[Path] = Path(tempfile.gettempdir()) / f"{APP_NAME}.lock"
 # platform defaults so it respects user/system overrides.
 
 __version__: Final[str] = version(APP_NAME)
+
+
+@dataclass(frozen=True)
+class COLORS:
+    command: str = "deep_sky_blue1"
+    envvar: str = "orange1"
+    option: str = "bold cyan"

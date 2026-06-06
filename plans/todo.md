@@ -2,6 +2,9 @@
 [ ] Get service install working on Mac
 [ ] Get service install working on Windows
 [ ] Write first version of dockerfile for the containerized service
+[ ] Make logging change to stdout when running in the service
+[X] Write keyring FileEncrypter backend
+[X] Get keyring working with FileEncrypter set as fallback
 [X] Set up tab completion for commands and options in the CLI
 [X] CLI reads from lock file where appropriate
 [X] Status check should robustly test if service is running - use os.kill(pid, 0) and get pid from the lock file
