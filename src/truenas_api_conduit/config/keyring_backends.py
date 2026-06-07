@@ -15,12 +15,14 @@ from keyring.errors import PasswordDeleteError, PasswordSetError, KeyringError
 from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
+from pydantic import SecretStr
 
 # project
 from truenas_api_conduit.errors import ConduitError
 from truenas_api_conduit.core import STORAGE_DIR
 from truenas_api_conduit.console import console_stderr
 from truenas_api_conduit.constants import COLORS
+from truenas_api_conduit.config.crypt_key import store_crypt_key, get_crypt_key
 
 SECRETS_DIR: Final[Path] = STORAGE_DIR / "secrets"
 
@@ -43,7 +45,7 @@ class GetErrorEnum(Enum):
 
 # NOTE: The keyring library purposefully does not have a PasswordGetError
 # because they decided it was easier to make it return None for all errors.
-# I personally don't agree with that so I've added it in. This is never going
+# I personally don't agree with that so I've added it in. This is not going
 # to be used as a third party library, so this is not an issue. If someone reading
 # this were to copy this code, be aware you'll need to add in some error handling
 # for this to wherever you've implemented the keyring library.
@@ -65,13 +67,14 @@ class NotATTYError(KeyringError, ConduitError):
 class FileEncrypter(KeyringBackend):
 
     def __init__(self):
+
         self.help_message_shown: bool = False
         self.help_message = (
             "Using the file encrypter keyring backend. This is selected when "
             "there is no other keyring backend available. You will be prompted "
             "to enter an encryption key to store and retrieve your API key.\n"
             f"You can also set the [{COLORS.envvar}]TRUENAS_CRYPT_KEY[default] environment "
-            "variable to avoid this prompt."
+            f"variable or create a [{COLORS.envvar}].crypt[default] file to avoid this prompt."
         )
         super().__init__()
 
@@ -124,7 +127,7 @@ class FileEncrypter(KeyringBackend):
         try:
             f = Fernet(self._derive_key(salt_file.read_bytes(), service, username))
             return f.decrypt(vault_file.read_bytes()).decode()
-        except InvalidToken as e:
+        except (InvalidToken, EOFError) as e:
             raise PasswordGetError(err_code=GetErrorEnum.INCORRECT_ENCRYPTION_KEY) from e
         except NotATTYError as e:
             raise PasswordGetError(err_code=GetErrorEnum.NOT_A_TTY) from e
@@ -162,33 +165,33 @@ class FileEncrypter(KeyringBackend):
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(), length=32, salt=salt, iterations=480000
         )
-
-        crypt_key = os.environ.get("TRUENAS_CRYPT_KEY")
-        if crypt_key is None:
-            if sys.stdin.isatty():
-                if not self.help_message_shown:
-                    console_stderr.print(self.help_message)
-                    self.help_message_shown = True
-                console_stderr.print(
-                    "Enter an encryption key for secret: "
-                    f"[{COLORS.envvar}]{service}.{username}[default]\n"
-                )
-                crypt_key = getpass.getpass(stream=sys.stderr)
-
-                # NOTE: This implementation will ask for the encryption key for every
-                # secret that is retrieved from it. This is not ideal, but it allows
-                # me to avoid storing the key in memory. In the case of this program,
-                # there's just the one secret, so it's not a big deal. But if I use
-                # this to store multiple secrets for something in the future, this
-                # could get annoying.
-            else:
-                raise NotATTYError("No env var set and stdin is not a TTY")
-        else:
-            log.info("Using TRUENAS_CRYPT_KEY environment variable")
-
+        crypt_key = self._get_crypt_key(service, username)
         safebytes = base64.urlsafe_b64encode(kdf.derive(crypt_key.encode()))
-        del crypt_key  #  so its not stored in memory
+        del crypt_key
         return safebytes
+
+    def _get_crypt_key(self, service: str, username: str) -> str:
+
+        crypt_key = get_crypt_key()
+        if crypt_key is not None:
+            log.warning("Found a stored encryption key, using it.")
+            return crypt_key.get_secret_value()
+
+        if sys.stdin.isatty():
+            if not self.help_message_shown:
+                log.warning(self.help_message)
+                self.help_message_shown = True
+            console_stderr.print(
+                "\nEnter encryption key for secret: "
+                f"[{COLORS.envvar}]{service}.{username}[default]"
+            )
+            crypt_key = getpass.getpass(stream=sys.stderr)
+            self.crypt_key = SecretStr(crypt_key)
+            del crypt_key
+            store_crypt_key(self.crypt_key)
+            return self.crypt_key.get_secret_value()
+        else:
+            raise NotATTYError("No env var set and stdin is not a TTY")
 
     @staticmethod
     def _ensure_salt_file(salt_file: Path) -> None:

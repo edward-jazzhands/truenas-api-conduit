@@ -3,13 +3,8 @@ import json
 import os
 import sys
 import logging
-
-# import json
-# import sys
 import signal
 import asyncio
-
-# from enum import StrEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -47,6 +42,7 @@ if sys.platform != "win32":
 
 
 log_setup.init_logging()
+log_setup.set_log_level(logging.DEBUG)
 log = logging.getLogger(__name__)
 
 
@@ -159,6 +155,8 @@ async def stop_truenas(app: web.Application) -> None:
 
 async def main(cfg: Config) -> None:
 
+    log.info("Starting to initialize the HTTP server")
+
     app = web.Application()
 
     app["config"] = cfg
@@ -173,12 +171,11 @@ async def main(cfg: Config) -> None:
     app.on_cleanup.append(stop_truenas)  # closes websocket client
 
     runner = web.AppRunner(app)
-    await runner.setup()  # fires on_startup
-    site = web.TCPSite(runner, host="127.0.0.1", port=cfg.socket_port)
+    await runner.setup()
+    site = web.TCPSite(runner, host=cfg.service_address, port=cfg.socket_port)
     await site.start()
 
-    # NOTE: address is hard-coded to localhost because this is a system service
-    # and as such we don't want it to be possible to reach it from the outside.
+    log.info("HTTP server started")
 
     try:
         await asyncio.Event().wait()
@@ -206,22 +203,17 @@ def start():
     # recall the Config class is a pydantic-settings model
     from truenas_api_conduit.config import Config
 
-    source: str = ""
     try:
-        # PRIORITY OF CONFIG SOURCES:
-        # 1. stdin (piped config)
-        if not sys.stdin.isatty():
-            source = "stdin"
+        raw = ""
+        if not sys.stdin.isatty():  # piped start, OS startup, etc
+            log.info("Detected not a TTY, checking stdin...")
             raw = sys.stdin.read()
+        if raw:
+            log.info("Detected input on stdin, loading from stdin")
+            log.debug("Raw config: %s", raw)
             cfg = Config.model_validate_json(raw)
-        # 2. env var TAC_CONFIG created by the CLI. Used if someone chooses the
-        # --foreground option. CLI does os.execvp to start a new process
-        elif os.environ.get("TAC_CONFIG"):
-            source = "TAC_CONFIG"
-            cfg = Config.model_validate_json(os.environ["TAC_CONFIG"])
-        # 3. Normal load (env vars, config file, keyring)
         else:
-            source = "standard"
+            log.info("No input on stdin, loading normally")
             cfg = Config()
     except json.JSONDecodeError as e:
         log.critical("Malformed config JSON: %s", e)
@@ -231,8 +223,11 @@ def start():
         sys.exit(1)
 
     log_level: int = logging.getLogger().level
+    level_mapping = logging.getLevelNamesMapping()
+    if log_level >= level_mapping["WARNING"]:
+        # The service must always run at info or lower
+        log_setup.set_log_level(level_mapping["INFO"])
     log.info("Logging level is currently at %s", log_level)
-    log.info("Config loaded from %s", source)
     log.debug("Config: %s", cfg)
     log.debug("Config provenance: %s", cfg.provenance)
 

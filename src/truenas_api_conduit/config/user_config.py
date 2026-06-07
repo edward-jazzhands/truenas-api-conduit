@@ -34,7 +34,7 @@ if not CONFIG_PATH.exists():
     log.error("Config file not found, this is a runtime bug.")
     raise FileNotFoundError(f"Config file not found at {CONFIG_PATH}")
 
-# NOTE: i've chosen a plain dict instead of a dataclass or something here
+# i've chosen a plain dict instead of a dataclass or something here
 # because it means I don't need to worry about adding/removing fields,
 # it just stays 100% dynamic.
 _config_provenance: dict[str, Any] = {}
@@ -46,6 +46,7 @@ class TrackingSourceMixin:
     def __call__(self) -> dict[str, Any]:
         # Call intercepter - we're doing a super call, examining the return
         # value, then returning that value as normal.
+        log.debug(f"Calling source: {self.source_label}")
 
         # Recall, every source returns the dict of k/v pairs it provides
         data: dict[str, Any] = super().__call__()  # type: ignore
@@ -54,6 +55,7 @@ class TrackingSourceMixin:
             if key_lower not in _config_provenance:
                 _config_provenance[key_lower] = self.source_label
                 log.debug(f"{key_lower} was loaded from {self.source_label}")
+        log.debug(data)
         return data
 
 
@@ -101,7 +103,12 @@ class Config(BaseSettings):
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
 
-        log.info("Populating settings from sources...")
+        # if the API key was passed in from the CLI then we skip the keyring
+        skip = False
+        api_key = init_settings.init_kwargs.get("api_key")
+        if api_key is not None:
+            log.debug("Found API key in init kwargs. Skipping keyring")
+            skip = True
 
         # Priority follows the order of the tuple:
         # 1. CLI flags passed into constructor
@@ -111,7 +118,7 @@ class Config(BaseSettings):
         # 5. Config class defaults
         return (
             TrackingInitSource(settings_cls, init_settings.init_kwargs),
-            TrackingKeyringSource(settings_cls, service="truenas-api-conduit"),
+            TrackingKeyringSource(settings_cls, service="truenas-api-conduit", skip=skip),
             TrackingEnvSource(settings_cls),
             TrackingTomlSource(settings_cls),
         )
@@ -125,8 +132,9 @@ class Config(BaseSettings):
 
     # Oh there's also now a third validation alias: "NO_COLOR". This is because
     # Rich-Click also uses that env var to disable color, so we use the same one.
+    # I believe its a common convention for CLI programs.
 
-    # NOTE: using default=... is a way to tell pydantic that the field is required,
+    # using default=... is a way to tell pydantic that the field is required,
     # while also preventing it from being a required constructor argument.
     # It signals to Pyright that Pydantic will take care of the validation.
 
@@ -143,22 +151,9 @@ class Config(BaseSettings):
     socket_port: int = 4567
     service_address: str = "localhost"
 
-    # computed_field decorator docs:
-    # https://pydantic.dev/docs/validation/latest/concepts/fields/#the-computed_field-decorator
-
     # Internal settings
 
-    # _user_password: str | None = PrivateAttr(default=None)
-
-    # @property
-    # def user_password(self) -> str | None:
-    #     return self._user_password
-
-    # @user_password.setter
-    # def user_password(self, v: str) -> None:
-    #     self._user_password = v
-
-    # NOTE: this is not a computed field because we don't want it to show up
+    # this is not a computed field because we don't want it to show up
     # in the model dump. It's only used internally.
     @property
     def uri(self) -> str:
@@ -248,10 +243,10 @@ class Config(BaseSettings):
 
         log_mapping = logging.getLevelNamesMapping()
         log_setup.set_log_level(log_mapping[self.log_level.upper()])
-        log.debug("Config post init: log_level set to %s", self.log_level)
+        log.info("Config post init: log_level set to %s", self.log_level)
 
         if self.no_color:
-            log.debug("Config post init: Disabling color output")
+            log.info("Config post init: Disabling color output")
             set_no_color()
 
         for field, value in Config.model_fields.items():

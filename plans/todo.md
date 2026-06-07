@@ -3,6 +3,7 @@
 [ ] Get service install working on Windows
 [ ] Write first version of dockerfile for the containerized service
 [ ] Make logging change to stdout when running in the service
+[X] Build system to store crypt key in a file and use it automatically
 [X] Write keyring FileEncrypter backend
 [X] Get keyring working with FileEncrypter set as fallback
 [X] Set up tab completion for commands and options in the CLI

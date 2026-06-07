@@ -49,6 +49,7 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
         settings_cls: type[BaseSettings],
         service: str | None = None,
         keyring_map: Mapping[str, Mapping] | None = None,
+        skip: bool = False,
     ) -> None:
         """Initialize the KeyringSettingsSource. Optionally pass in a keyring map.
 
@@ -71,7 +72,7 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
             service: The keyring service to use.
             keyring_map: A mapping of field names in your pydantic settings class to keyring
                 service and username.
-            raise_on_missing_key: Whether to raise an error if a key is not found in the keyring.
+            skip: if True the keyring source will be skipped entirely
 
         Using a keyring map allows you to override the default keyring service and username
         fields if necessary. This might be necessary if the secrets were added manually or
@@ -99,6 +100,8 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
         self.service = service
         self.config_keyring_map = keyring_map
         "keys match field names in the settings class"
+
+        self.skip = skip
 
         super().__init__(settings_cls)  # available at self.settings_cls
 
@@ -129,6 +132,9 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
         return field_info.json_schema_extra.get("keyring") is True
 
     def __call__(self) -> dict[str, Any]:
+
+        if self.skip:
+            return {}
 
         # This is only called one time when the program launches, so it makes
         # sense to put a lazy import here to improve startup time.
@@ -210,8 +216,8 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
                 # not found.
                 if e.err_code == GetErrorEnum.NOT_A_TTY:
                     log.warning(
-                        "TRUENAS_CRYPT_KEY environment variable not set and stdin is not "
-                        "a TTY. There's no way to use the FileEncrypter keyring backend."
+                        "Could not find a stored encryption key and stdin is not a TTY. "
+                        "There's no way to use the FileEncrypter keyring backend."
                     )
                     pass
                 elif e.err_code == GetErrorEnum.VAULT_FILE_NOT_FOUND:

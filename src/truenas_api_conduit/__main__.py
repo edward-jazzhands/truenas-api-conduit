@@ -4,7 +4,7 @@ import sys
 import logging
 import os
 import json
-from typing import Any, Callable
+from typing import Any, Callable, assert_never
 
 # third-party
 import rich_click as click
@@ -282,11 +282,41 @@ def start(
     if standalone:
         log.info("Starting service in foreground")
 
-        # * This shall henceforth be known as The execvp Chad Swap inside my brain
-
-        os.environ["TAC_CONFIG"] = cfg.model_dump_json(context={"unmask": True})
+        cfg_dump = cfg.model_dump_json(context={"unmask": True})
         dname = APP_NAME + "d"  # ex: my-appd
+
+        # file descriptors are just indices into the process's open file table,
+        # the kernel tracks the actual file/pipe/socket, and hands you back a small
+        # integer as a handle to refer to it. os.pipe gives you two of those indices.
+        # Windows has its own handle system but python's os.pipe, os.dup2, and
+        # os.write abstract over that
+
+        # os.pipe creates two connected file descriptors, anything written to
+        # write_fd can be read from read_fd.
+        read_fd, write_fd = os.pipe()
+
+        # os.write takes a file descriptor and data. We dump into the pipe buffer,
+        # then close the write end. Since the pipe buffer is in kernel space and
+        # the write end is now closed, the read end will see EOF once the data
+        # is consumed (no hanging)
+        os.write(write_fd, cfg_dump.encode())
+        os.close(write_fd)
+
+        # os.dup2 takes two file descriptors and copies the first to the second.
+        # We're copying our read_fd onto fd 0 (stdin is fd 0), so that when the
+        # program launches, it will see our read_fd as stdin.
+        os.dup2(read_fd, 0)
+
+        # os.close(read_fd) cleans up the now-redundant original read_fd, fd 0
+        # already holds the pipe, so you don't need two references to it.
+        os.close(read_fd)
+
+        # * This shall henceforth be known as The execvp stdin Chad Swap
+
+        # The new program inherits all open file descriptors, including fd 0,
+        # which it now sees as normal stdin
         os.execvp(dname, [dname])
+
     else:
         log.info("Telling OS to start the service")
         # from truenas_api_conduit.service import get_service_manager
@@ -327,16 +357,15 @@ def install(
     assert ctx.console is not None
 
     from truenas_api_conduit.service import get_service_manager
-    from truenas_api_conduit.core import PLATFORM, InstallType
 
-    service = get_service_manager(PLATFORM)
+    service = get_service_manager(core.PLATFORM)
 
     if system:
-        service.install(InstallType.SYSTEM)
+        service.install(core.InstallType.SYSTEM)
     elif package:
-        service.install(InstallType.PACKAGE)
+        service.install(core.InstallType.PACKAGE)
     else:
-        service.install(InstallType.USER)
+        service.install(core.InstallType.USER)
 
 
 @cli.command()
@@ -522,7 +551,10 @@ def request(
                 "printing to see the raw response",
                 e,
             )
-            sys.exit(1)
+            if ctx.obj.verbose >= 3:
+                raise
+            else:
+                sys.exit(1)
     else:
         ctx.console.print(response.text, soft_wrap=True)
 
@@ -552,7 +584,10 @@ def stop(ctx: click.RichContext) -> None:
                 "printing to see the raw response",
                 e,
             )
-            sys.exit(1)
+            if ctx.obj.verbose >= 3:
+                raise
+            else:
+                sys.exit(1)
     else:
         ctx.console.print(response.text, soft_wrap=True)
 
@@ -582,7 +617,10 @@ def restart(ctx: click.RichContext) -> None:
                 "printing to see the raw response",
                 e,
             )
-            sys.exit(1)
+            if ctx.obj.verbose >= 3:
+                raise
+            else:
+                sys.exit(1)
     else:
         ctx.console.print(response.text, soft_wrap=True)
 
@@ -612,7 +650,10 @@ def status(ctx: click.RichContext) -> None:
                 "printing to see the raw response",
                 e,
             )
-            sys.exit(1)
+            if ctx.obj.verbose >= 3:
+                raise
+            else:
+                sys.exit(1)
     else:
         ctx.console.print(response.text, soft_wrap=True)
 
@@ -638,25 +679,40 @@ starts up! This would be unsuitable for starting at boot or other such automatio
 
 delete_help = "Delete the API key from the current keyring backend."
 show_help = "Show the API key in the current keyring backend."
+del_crypt_help = "Delete the stored encryption key file, if it exists."
 
 
 @cli.command(help=set_key_help, short_help=set_key_help_short)
 @click.option("-d", "--delete", is_flag=True, default=False, help=delete_help)
+@click.option("-dc", "--del-crypt", is_flag=True, default=False, help=del_crypt_help)
 @click.option("-s", "--show", is_flag=True, default=False, help=show_help)
 @common_options
 @click.pass_context
-def set_key(ctx: click.RichContext, delete: bool = False, show: bool = False) -> None:
+def set_key(
+    ctx: click.RichContext,
+    delete: bool = False,
+    del_crypt: bool = False,
+    show: bool = False,
+) -> None:
 
     if delete and show:
         raise click.UsageError("You cannot specify both --delete and --show")
+    if del_crypt and show:
+        raise click.UsageError("You cannot specify both --del-crypt and --show")
 
     logging_setup(ctx)
+    assert isinstance(ctx.obj, CLIOptions)
     assert ctx.console is not None
 
     import keyring
-    import keyring.errors
+    import keyring.errors as kr_errs
     import keyring.backend
-    from truenas_api_conduit.config.keyring_backends import FileEncrypter
+    from truenas_api_conduit.core import CRYPT_KEY_FILE
+    from truenas_api_conduit.config.keyring_backends import (
+        FileEncrypter,
+        PasswordGetError,
+        GetErrorEnum,
+    )
 
     # my custom fallback file encrypter keyring backend. This is set to
     # lowest priority (0.0) so that it should only be used if no other
@@ -671,39 +727,86 @@ def set_key(ctx: click.RichContext, delete: bool = False, show: bool = False) ->
     current_backend = keyring.get_keyring()
     log.debug(f"Current keyring backend: {current_backend.name}")
 
-    if "FileEncrypter" in current_backend.name:
-        log.warning(
-            "Using the fallback file encryption keyring backend. You may want to "
-            f"set the [{COLORS.envvar}]TRUENAS_CRYPT_KEY[default] environment "
-            "variable to avoid being prompted for an encryption key every time the "
-            "service starts up"
-        )
+    service = "truenas-api-conduit"
+    username = "api_key"
 
     action_desc = "<action>"
     try:
         if delete:
             log.info("Deleting API key from '%s'", current_backend.name)
             action_desc = "delete API key from"
-            keyring.delete_password("truenas-api-conduit", "api_key")
+            keyring.delete_password(service, username)
             ctx.console.print("Deleted API key from keyring")
+            if del_crypt:
+                CRYPT_KEY_FILE.unlink()
+                ctx.console.print(f"Deleted crypt key file ({CRYPT_KEY_FILE})")
+        elif del_crypt:
+            log.info("Deleting crypt key file")
+            action_desc = "delete crypt key file"
+            CRYPT_KEY_FILE.unlink()
+            ctx.console.print(f"Deleted crypt key file ({CRYPT_KEY_FILE})")
         elif show:
             log.info("Showing API key from '%s'", current_backend.name)
             action_desc = "show API key from"
-            api_key = keyring.get_password("truenas-api-conduit", "api_key")
+            api_key = keyring.get_password(service, username)
             ctx.console.print(api_key)
         else:
             log.info("Setting API key in '%s'", current_backend.name)
             action_desc = "set API key in"
             api_key = click.prompt("Enter your TrueNAS API key", hide_input=True)
-            keyring.set_password("truenas-api-conduit", "api_key", api_key)
+            keyring.set_password(service, username, api_key)
             ctx.console.print("Success: key set")
     except click.Abort:
         raise
-    except keyring.errors.KeyringError as e:
+    except PasswordGetError as e:
+        # This is my custom error class so it will only happen if keyring tried
+        # to use my fallback FileEncrypter backend, and the user password was
+        # not found.
+        err_string: str | None = None
+        if e.err_code == GetErrorEnum.NOT_A_TTY:
+            console_stderr.print(
+                "TRUENAS_CRYPT_KEY environment variable not set and stdin is not "
+                "a TTY. There's no way to use the FileEncrypter keyring backend."
+            )
+            pass
+        elif e.err_code == GetErrorEnum.VAULT_FILE_NOT_FOUND:
+            err_string = "[default]" + (
+                f"Key is not set for: [{COLORS.envvar}]{service}.{username}"
+            )
+            pass
+        elif e.err_code == GetErrorEnum.SALT_FILE_NOT_FOUND:
+            err_string = "[default]" + (
+                f"No salt file found for: [{COLORS.envvar}]{service}.{username}[default] "
+                "-- the key is not retrievable. Please delete the key and set it again."
+            )
+        elif e.err_code == GetErrorEnum.INCORRECT_ENCRYPTION_KEY:
+            err_string = "[default]The encryption key you have entered is incorrect."
+        elif e.err_code == GetErrorEnum.GENERIC_ERROR:
+            # This would indicate a bug in the program
+            raise
+        else:
+            assert_never(e.err_code)
+
+        if err_string is not None:
+            console_stderr.print(make_usage_error_panel(err_string, "Keyring Error"))
+        if ctx.obj.verbose >= 3:
+            raise
+    except (
+        kr_errs.KeyringError,
+        kr_errs.PasswordSetError,
+        kr_errs.PasswordDeleteError,
+    ) as e:
         err_string = "[default]" + str(e)
         console_stderr.print(make_usage_error_panel(err_string, "Keyring Error"))
+        if ctx.obj.verbose >= 3:
+            raise
+    except FileNotFoundError as e:
+        err_string = "[default]" + str(e)
+        console_stderr.print(make_usage_error_panel(err_string, "Error"))
     except Exception as e:
-        log.error("Could not %s keyring: %s | %s", action_desc, type(e), e)
+        log.error("Could not %s keyring: (%s) | %s", action_desc, e.__class__.__name__, e)
+        if ctx.obj.verbose >= 3:
+            raise
 
 
 config_help = f"""Attempts to open the config file in your editor, if
@@ -749,22 +852,28 @@ print_config_help_short = f"""Validate and output your current configuration as
 JSON to stdout
 ([{COLORS.command}]print_config --help[default] for more info)"""
 
-print_config_help = """Validate and output your current configuration as JSON to
-stdout. This can be saved and passed in to the service's stdin to start it.
-Logging/debug is separated out to stderr. Warning: This will output
-your full API key in plain text"""
+print_config_help = f"""Output your current configuration as JSON to
+stdout. If you use the [{COLORS.command}]--unmask[default] option, then this
+can be saved and passed in to the service's stdin to start it. If using --unmask
+and the API key is stored with the [{COLORS.option}]set-key[default]
+command, you may be prompted for a password for encryption key"""
+
+unmask_help = """Output your API key in plain text. This is useful if you want to
+store the configuration JSON in a file and pass it to the service's stdin to start
+it. May trigger a password prompt"""
 
 
 @cli.command(help=print_config_help, short_help=print_config_help_short)
+@click.option("-u", "--unmask", is_flag=True, default=False, help=unmask_help)
 @common_options
 @click.pass_context
-def print_config(ctx: click.RichContext) -> None:
+def print_config(ctx: click.RichContext, unmask: bool = False) -> None:
 
     logging_setup(ctx)
     assert ctx.console is not None
 
-    cfg = config_setup(ctx.obj)
-    json_dict = cfg.model_dump_json(indent=2, context={"unmask": True})
+    cfg = config_setup(ctx.obj, unmask=unmask)
+    json_dict = cfg.model_dump_json(indent=2, context={"unmask": unmask})
 
     ctx.console.print(json_dict)
     if ctx.obj.verbose == 0:

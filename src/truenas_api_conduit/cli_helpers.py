@@ -95,28 +95,11 @@ field_help_dict = {
 }
 
 
-def config_setup(cli_options: CLIOptions) -> Config:
+def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
 
     log_level: int = logging.getLogger().level
     level_name = logging.getLevelName(log_level)
     log_mapping = logging.getLevelNamesMapping()
-
-    if cli_options.api_key:
-        log.debug("Prompting for API key")
-        api_key = click.prompt("Enter your TrueNAS API key", hide_input=True)
-    else:
-        api_key = None
-
-    # Creating an args dict because we only want to pass in the args that the user
-    # passed in through the CLI. You can't pass None values to the Config class because
-    # it would treat "None" as the desired value, instead of treating it as missing.
-    to_filter: dict[str, Any] = {
-        "log_level": level_name,
-        "no_color": cli_options.no_color,
-        "truenas_host": cli_options.truenas_host,
-        "api_key": api_key,
-    }
-    args_dict = {k: v for k, v in to_filter.items() if v is not None}
 
     # NOTE: Remember that the config file/dir must be ensured before trying to
     # import the user_config module:
@@ -126,8 +109,35 @@ def config_setup(cli_options: CLIOptions) -> Config:
     # Pydantic will not be loaded until this following import. Its one
     # of the heavier dependencies so this improves startup time.
     from truenas_api_conduit.config import Config
-    from pydantic import ValidationError  # .config already imports pydantic
+    from pydantic import ValidationError
     import tomllib
+
+    # only used by the start command
+    if cli_options.api_key:
+        log.debug("Prompting for API key")
+        api_key = click.prompt("Enter your TrueNAS API key", hide_input=True)
+    else:
+        api_key = None
+
+    # only used by the print-config command
+    if unmask is False:
+        api_key = "*" * 10
+
+    # Creating an args dict because we only want to pass in the args that the user
+    # passed in through the CLI. You can't pass None values to the Config class because
+    # it would treat "None" as the desired value, instead of treating it as missing.
+    to_filter: dict[str, Any] = {
+        "log_level": level_name if level_name != "warning" else None,
+        "no_color": cli_options.no_color,
+        "truenas_host": cli_options.truenas_host,
+        "api_key": api_key,
+    }
+    args_dict = {k: v for k, v in to_filter.items() if v is not None}
+
+    # NOTE: on the log level: warning is already the default set in the pydantic
+    # settings class. If the user didn't pass -v/--verbose, we want to pass None
+    # instead of "warning" in order to let pydantic-settings try to pull it from
+    # the env var or the config file, before falling back to the default.
 
     fields_with_errors: list[str | int] = []
 

@@ -1,13 +1,13 @@
 # standard library
 from typing import Final
 from pathlib import Path
+import sys
 
 # third party
 import platformdirs
 
 # project
 from truenas_api_conduit import APP_NAME
-from .detect_platform import detect
 from .setup_app_dir import ensure_config as _ensure_config
 from .setup_app_dir import ensure_storage_dir as _ensure_storage_dir
 from .global_enums import Platform, InstallType, Endpoints
@@ -21,6 +21,19 @@ __all__ = [
     "CONFIG_DIR",
     "CONFIG_PATH",
 ]
+
+
+def detect() -> Platform:
+    match sys.platform:
+        case "linux":
+            return Platform.LINUX
+        case "win32":
+            return Platform.WINDOWS
+        case "darwin":
+            return Platform.MACOS
+        case _:
+            raise RuntimeError(f"Unknown Operating System: {sys.platform}")
+
 
 PLATFORM: Final[Platform] = detect()
 
@@ -52,6 +65,8 @@ def ensure_config() -> None:
 # On MacOS: ~/Library/Application Support/truenas-api-conduit
 # On Linux: ~/.local/share/truenas-api-conduit
 STORAGE_DIR: Final[Path] = Path(platformdirs.user_data_dir(APP_NAME))
+
+CRYPT_KEY_FILE: Final[Path] = CONFIG_DIR / ".crypt"
 
 
 def ensure_storage_dir() -> None:
