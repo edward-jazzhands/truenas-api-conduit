@@ -3,6 +3,8 @@
 [ ] Get service install working on Windows
 [ ] Write first version of dockerfile for the containerized service
 [ ] Make logging change to stdout when running in the service
+[ ] Make prompt for encryption key retry on wrong key
+[X] Separate concerns between the Keyring Source and the FileEncrypter backend, also make it more generally reusable
 [X] Build system to store crypt key in a file and use it automatically
 [X] Write keyring FileEncrypter backend
 [X] Get keyring working with FileEncrypter set as fallback

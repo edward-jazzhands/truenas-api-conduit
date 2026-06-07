@@ -1,16 +1,14 @@
 # standard library
-from typing import Any, Mapping, assert_never
+from typing import Any, Mapping
 import logging
-import sys
 
 # third party
-from pydantic.fields import FieldInfo
+from pydantic import SecretStr
+from pydantic.fields import FieldInfo, Field
 from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
-from keyring.errors import KeyringError
+import keyring
+import keyring.backend
 
-# project
-from truenas_api_conduit.errors import ProgrammerError, ConduitError
-from truenas_api_conduit.console import console_stderr
 
 log = logging.getLogger(__name__)
 
@@ -23,16 +21,15 @@ log = logging.getLogger(__name__)
 #         -> [GNOME Keyring daemon / KWallet / KeePassXC]
 
 
-class KeyringLookupError(ConduitError, KeyringError, LookupError):
-    def __init__(self, service: str, username: str):
-        self.service = service
-        self.username = username
-        super().__init__(
-            f"No results found in keyring for service: '{service}' and username: {username}\n"
-            "This is raising an exception because `raise_on_missing_key` is True "
-            "when initialzing the KeyringSettingsSource class. Change it to False to "
-            "suppress this error."
-        )
+def KeyringField(*args, **kwargs) -> SecretStr:
+    "Note this MUST be assigned to a SecretStr field"
+    
+    extra: dict = {"keyring": True}
+    if caller_extra := kwargs.pop("json_schema_extra", None):
+        if not isinstance(caller_extra, dict):
+            raise ValueError("KeyringField does not support callable json_schema_extra")
+        extra = {**extra, **caller_extra}
+    return Field(*args, json_schema_extra=extra, **kwargs)
 
 
 class KeyringSettingsSource(PydanticBaseSettingsSource):
@@ -59,12 +56,17 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
         If you don't pass in a keyring map, it will use the provided service arg for
         `service` and the field name of each keyring field for `username`.
 
-        Keyring fields you want to use must pass in a dict to the json_schema_extra
-        arg containing {"keyring": True}. For example:
+        Keyring fields you want to use must use the KeyringField function to
+        mark them as fields you want to pull from the keyring. For example:
 
         ```
+        api_key_1: str = KeyringField(default=...)
+        api_key_2: str = KeyringField(default=...)
+        ```
+
+        KeyringField is a helper function that simply does this under the hood:
+        ```
         api_key_1: str = Field(default=..., json_schema_extra={"keyring": True})
-        api_key_2: str = Field(default=..., json_schema_extra={"keyring": True})
         ```
 
         Args:
@@ -72,7 +74,11 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
             service: The keyring service to use.
             keyring_map: A mapping of field names in your pydantic settings class to keyring
                 service and username.
-            skip: if True the keyring source will be skipped entirely
+            skip: If True the keyring source will be skipped entirely. This is useful if
+                the field was already passed in from a higher priority source (ie CLI args)
+                and you don't want to trigger the user's password prompt (pydantic-settings
+                evaluates all sources and THEN combines them, they have no knowledge
+                of each other)
 
         Using a keyring map allows you to override the default keyring service and username
         fields if necessary. This might be necessary if the secrets were added manually or
@@ -92,7 +98,7 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
         ```
         """
         if service is None and keyring_map is None:
-            raise ProgrammerError(
+            raise ValueError(
                 "You must pass in either a service or keyring_map to the "
                 "KeyringSettingsSource constructor."
             )
@@ -102,19 +108,81 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
         "keys match field names in the settings class"
 
         self.skip = skip
-
         super().__init__(settings_cls)  # available at self.settings_cls
 
     def get_field_value(self, field: FieldInfo, field_name: str) -> tuple[Any, str, bool]:
-        # Required override from PydanticBaseSettingsSource (an ABC).
+
+        # This will look for a flag set in the json_schema_extra dict, and pass
+        # any fields that don't have it set. Add it to a field by doing this:
+        # ```
+        # api_key: str = Field(default=..., json_schema_extra={"keyring": True})
+        # ```
+        # Or using the KeyringField function:
+        # ```
+        # api_key: str = KeyringField(default=...)
+        # ```
+
+        if not self.is_keyring_field(field):
+            return None, field_name, False
+
+        # NOTE: If the user has set an alias or validation alias, we want
+        # to respect that instead of using the field name
+        lookup_key = field_name
+        if isinstance(field.validation_alias, str):
+            lookup_key = field.validation_alias
+        elif isinstance(field.alias, str):
+            lookup_key = field.alias
+
+        # If there's a mapping, use it, otherwise use self.service + lookup_key
+        if self.config_keyring_map is not None:
+            try:
+                mapping = self.config_keyring_map[lookup_key]
+            except KeyError:
+                raise ValueError(
+                    f"The keyring map does not contain a mapping for {lookup_key}"
+                )
+            service = mapping["service"]
+            username = mapping["username"]
+        else:
+            assert_msg = (
+                "self.service is None and self.config_keyring_map is also None, "
+                "this is supposed to be logically impossible."
+            )
+            # self.service is guaranteed to not be None if we've reached this point.
+            assert self.service is not None, assert_msg
+            service = self.service
+            username = lookup_key
+
+        # TODO: get_password should maybe run in a different thread?
+        # it might be IO bound
+        try:
+            password = keyring.get_password(service, username)
+        except keyring.backend.errors.NoKeyringError:
+            log.info(
+                "No keyring backend or secrets manager found. You can still pass in your "
+                "API key as an environment variable, a CLI option, or in the config file."
+            )
+        except keyring.backend.errors.KeyringError as e:
+            # NOTE: This should not happen simply because the password was not found.
+            # This should only happen if there's some kind of bug somewhere.
+            log.error(f"Could not get password from keyring: {e}")
+            raise
+        except Exception as e:
+            log.error(
+                f"Unexpected error while trying to get password from keyring: {e}"
+            )
+            raise
+        else:
+            # Under normal circumstances, keyring.get_password() will just return
+            # None instead of raising an exception. So this should be the typical
+            # hot path unless there's a bug somewhere.
+            if password is not None:
+                log.info("Found API key in keyring")
+                return password, field_name, False
+            else:
+                log.debug("No API key found in keyring")
+
         # Returns a tuple of (value, field_name, value_is_complex).
-
-        # NOTE: We don't actually need to use this method so this is a placeholder.
-        # The PydanticBaseSettingsSource is designed so that you call this method
-        # yourself in the __call__ override. But, this isn't used by anything else,
-        # and it's not actually necessary to use it at all. So I'm just not.
-        # Modern problems require modern solutions.
-
         return None, field_name, False
 
     @staticmethod
@@ -136,21 +204,6 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
         if self.skip:
             return {}
 
-        # This is only called one time when the program launches, so it makes
-        # sense to put a lazy import here to improve startup time.
-        import keyring
-        import keyring.backend
-        from truenas_api_conduit.config.keyring_backends import (
-            FileEncrypter,
-            PasswordGetError,
-            GetErrorEnum,
-        )
-
-        # my custom fallback file encrypter keyring backend. This is set to
-        # lowest priority (0.0) so that it should only be used if no other
-        # keyring backends are available.
-        keyring.set_keyring(FileEncrypter())
-
         # all_keyrings will always contain 'fail Keyring' and 'chainer ChainerBackend'
         # even if no other keyrings are present.
         all_keyrings = keyring.backend.get_all_keyring()
@@ -162,115 +215,11 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
         return_dict: dict[str, Any] = {}
 
         for field_name, field_info in self.settings_cls.model_fields.items():
-
-            # This will look for a flag set in the json_schema_extra dict, and pass
-            # any fields that don't have it set. Add it to a field by doing this:
-            # ```
-            # api_key: str = Field(default=..., json_schema_extra={"keyring": True})
-            # ```
-
-            if not self.is_keyring_field(field_info):
-                continue
-
-            # NOTE: If the user has set an alias or validation alias, we want
-            # to respect that instead of using the field name
-            lookup_key = field_name
-            if isinstance(field_info.validation_alias, str):
-                lookup_key = field_info.validation_alias
-            elif isinstance(field_info.alias, str):
-                lookup_key = field_info.alias
-
-            # If there's a mapping, use it, otherwise use self.service + lookup_key
-            if self.config_keyring_map is not None:
-                try:
-                    mapping = self.config_keyring_map[lookup_key]
-                except KeyError:
-                    raise ProgrammerError(
-                        f"The keyring map does not contain a mapping for {lookup_key}"
-                    )
-                service = mapping["service"]
-                username = mapping["username"]
-            else:
-                assert_msg = (
-                    "self.service is None and self.config_keyring_map is also None, "
-                    "this is supposed to be logically impossible."
-                )
-                # self.service is guaranteed to not be None if we've reached this point.
-                assert self.service is not None, assert_msg
-                service = self.service
-                username = lookup_key
-
-            # TODO: get_password should maybe run in a different thread,
-            # it might be IO bound
-            try:
-                password = keyring.get_password(service, username)
-            except keyring.backend.errors.NoKeyringError:
-                log.info(
-                    "No keyring backend or secrets manager found. You can still pass in your "
-                    "API key as an environment variable, a CLI option, or in the config file."
-                )
-                return {}
-            except PasswordGetError as e:
-                # This is my custom error class so it will only happen if keyring tried
-                # to use my fallback FileEncrypter backend, and the user password was
-                # not found.
-                if e.err_code == GetErrorEnum.NOT_A_TTY:
-                    log.warning(
-                        "Could not find a stored encryption key and stdin is not a TTY. "
-                        "There's no way to use the FileEncrypter keyring backend."
-                    )
-                    pass
-                elif e.err_code == GetErrorEnum.VAULT_FILE_NOT_FOUND:
-                    log.debug("No vault file found for: %s.%s", service, username)
-                    pass
-                elif e.err_code == GetErrorEnum.SALT_FILE_NOT_FOUND:
-                    console_stderr.print(
-                        f"No salt file found for: {service}.{username} -- the key is not "
-                        "retrievable. Please delete the key and set it again."
-                        "\nDo you want to continue, or exit the program?",
-                    )
-                    answer = input("Enter 'y' to continue. Anything else will exit:  ")
-                    if answer.lower() == "y":
-                        continue
-                    else:
-                        sys.exit(1)
-                elif e.err_code == GetErrorEnum.INCORRECT_ENCRYPTION_KEY:
-                    console_stderr.print(
-                        "The encryption key you have entered is incorrect. The program "
-                        "will fall back to reading the API key from a different source. "
-                        "Otherwise you must exit and restart to enter your encryption "
-                        "key again. \nDo you want to continue, or exit the program?"
-                    )
-                    answer = input("Enter 'y' to continue. Anything else will exit:  ")
-                    if answer.lower() == "y":
-                        continue
-                    else:
-                        sys.exit(1)
-                elif e.err_code == GetErrorEnum.GENERIC_ERROR:
-                    # This would indicate a bug in the program
-                    raise
-                else:
-                    assert_never(e.err_code)
-
-            except keyring.backend.errors.KeyringError as e:
-                # NOTE: This should not happen simply because the password was not found.
-                # This should only happen if there's some kind of bug somewhere.
-                log.error(f"Could not get password from keyring: {e}")
-                raise
-            except Exception as e:
-                log.error(
-                    f"Unexpected error while trying to get password from keyring: {e}"
-                )
-                raise
-            else:
-                # Under normal circumstances, keyring.get_password() will just return
-                # None instead of raising an exception. So this should be the typical
-                # hot path unless there's a bug somewhere.
-                if password is not None:
-                    log.info("Found API key in keyring")
-                    return_dict[field_name] = password
-                else:
-                    log.debug("No API key found in keyring")
+            value, field_name, _value_is_complex = self.get_field_value(
+                field=field_info, field_name=field_name
+            )
+            if value is not None:
+                return_dict[field_name] = value
 
         # NOTE: Recall how this works: any key/value pairs in this dictionary will
         # override the defaults in the Config class. It only needs to contain the

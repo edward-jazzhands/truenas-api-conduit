@@ -878,7 +878,7 @@ def print_config(ctx: click.RichContext, unmask: bool = False) -> None:
     ctx.console.print(json_dict)
     if ctx.obj.verbose == 0:
         console_stderr.print(
-            "\n[italic]Tip: set verbosity/logging to debug to see provenance[/italic]",
+            "\n[italic]Tip: set verbosity/logging to info to see provenance[/italic]",
             markup=True,
         )
 
@@ -930,6 +930,9 @@ def version(ctx: click.RichContext) -> None:
 
     logging_setup(ctx)
     assert ctx.console is not None
+
+    # TODO: This should have some method of pinning which version of the TrueNAS
+    # API its written for.
 
     ctx.console.print(f"{APP_NAME} {__version__}")
 

@@ -4,7 +4,7 @@ import os
 import sys
 import getpass
 from pathlib import Path
-from typing import Final
+from typing import Final, assert_never
 import logging
 from enum import Enum
 
@@ -112,7 +112,14 @@ class FileEncrypter(KeyringBackend):
             log.error("Could not set password in keyring: %s", e)
             raise PasswordSetError(f"Could not set password in keyring: {e}") from e
 
+
     def get_password(self, service: str, username: str) -> str | None:
+        try:
+            return self._get_password(service, username)
+        except PasswordGetError as e:
+            self._handle_password_get_error(e, service, username)
+
+    def _get_password(self, service: str, username: str) -> str | None:
 
         vault_file: Path = self._get_vault_file(service, username)
         salt_file = vault_file.with_suffix(".salt")
@@ -216,3 +223,47 @@ class FileEncrypter(KeyringBackend):
         # referred to as the "byte sandwich" pattern
         safe_name = base64.urlsafe_b64encode(f"{service}::{username}".encode()).decode()
         return SECRETS_DIR / safe_name
+
+    @staticmethod
+    def _handle_password_get_error(e: PasswordGetError, service: str, username: str) -> None:
+
+        # This is my custom error class so it will only happen if keyring tried
+        # to use my fallback FileEncrypter backend, and the user password was
+        # not found.
+        if e.err_code == GetErrorEnum.NOT_A_TTY:
+            log.warning(
+                "Could not find a stored encryption key and stdin is not a TTY. "
+                "There's no way to use the FileEncrypter keyring backend."
+            )
+            return
+        elif e.err_code == GetErrorEnum.VAULT_FILE_NOT_FOUND:
+            log.debug("No vault file found for: %s.%s", service, username)
+            return
+        elif e.err_code == GetErrorEnum.SALT_FILE_NOT_FOUND:
+            console_stderr.print(
+                f"No salt file found for: {service}.{username}\n"
+                "The key is not retrievable. Please delete the key and set it again."
+                "\nDo you want to continue, or exit the program?",
+            )
+            answer = input("Enter 'y' to continue. Anything else will exit:  ")
+            if answer.lower() == "y":
+                return
+            else:
+                sys.exit(1)
+        elif e.err_code == GetErrorEnum.INCORRECT_ENCRYPTION_KEY:
+            console_stderr.print(
+                "The encryption key you have entered is incorrect. The program "
+                "will fall back to reading the API key from a different source. "
+                "Otherwise you must exit and restart to enter your encryption "
+                "key again. \nDo you want to continue, or exit the program?"
+            )
+            answer = input("Enter 'y' to continue. Anything else will exit:  ")
+            if answer.lower() == "y":
+                return
+            else:
+                sys.exit(1)
+        elif e.err_code == GetErrorEnum.GENERIC_ERROR:
+            # This would indicate a bug in the program
+            raise
+        else:
+            assert_never(e.err_code)

@@ -210,7 +210,7 @@ def start():
             raw = sys.stdin.read()
         if raw:
             log.info("Detected input on stdin, loading from stdin")
-            log.debug("Raw config: %s", raw)
+            log.debug("Raw config: %s", raw) #! FIXME: DELETE THIS
             cfg = Config.model_validate_json(raw)
         else:
             log.info("No input on stdin, loading normally")

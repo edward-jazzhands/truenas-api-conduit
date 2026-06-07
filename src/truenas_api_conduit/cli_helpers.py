@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 if TYPE_CHECKING:
     from truenas_api_conduit.config.user_config import Config
+    from pydantic import ValidationError
     import tomllib
 
 # third-party
@@ -76,25 +77,6 @@ def logging_setup(ctx: click.RichContext) -> None:
     log_setup.set_log_level(log_level)
 
 
-field_help_dict = {
-    "api_key": (
-        "\n\n[default]You need to set a value for your TrueNAS API key. You can set "
-        "it in one of the following ways:\n"
-        f"  1. Using the [{COLORS.command}]set-key[default] command in the CLI\n"
-        f"  2. Using the [{COLORS.command}]--api-key[default] option in the CLI (see start --help)\n"
-        f"  3. As an environment variable [env: [{COLORS.envvar}]TRUENAS_API_KEY[default]=]\n"
-        "  4. In the config file (least secure)"
-    ),
-    "truenas_host": (
-        "\n\n[default]You need to set a value for your TrueNAS server's address. You "
-        "can set it in one of the following ways:\n"
-        "  1. In the config file\n"
-        f"  2. As an environment variable [env: [{COLORS.envvar}]TRUENAS_HOST[default]=]\n"
-        f"  3. Using the [{COLORS.command}]--truenas-host[default] option in the CLI (see start --help)"
-    ),
-}
-
-
 def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
 
     log_level: int = logging.getLogger().level
@@ -107,7 +89,7 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
     core.ensure_storage_dir()
 
     # Pydantic will not be loaded until this following import. Its one
-    # of the heavier dependencies so this improves startup time.
+    # of the heavier dependencies so this improves startup time marginally.
     from truenas_api_conduit.config import Config
     from pydantic import ValidationError
     import tomllib
@@ -120,6 +102,10 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
         api_key = None
 
     # only used by the print-config command
+    # NOTE: The point of this is so that the user won't be triggered to enter
+    # the password for their keyring/secret manager unless they set --unmask.
+    # It just tricks pydantic into thinking the API key was passed in through
+    # CLI args and thus will skip the keyring/secret manager.
     if unmask is False:
         api_key = "*" * 10
 
@@ -127,36 +113,24 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
     # passed in through the CLI. You can't pass None values to the Config class because
     # it would treat "None" as the desired value, instead of treating it as missing.
     to_filter: dict[str, Any] = {
-        "log_level": level_name if level_name != "warning" else None,
+        "log_level": level_name if level_name.upper() != "WARNING" else None,
         "no_color": cli_options.no_color,
         "truenas_host": cli_options.truenas_host,
         "api_key": api_key,
     }
     args_dict = {k: v for k, v in to_filter.items() if v is not None}
 
+    log.debug("Config args: %s", args_dict)
+
     # NOTE: on the log level: warning is already the default set in the pydantic
     # settings class. If the user didn't pass -v/--verbose, we want to pass None
     # instead of "warning" in order to let pydantic-settings try to pull it from
     # the env var or the config file, before falling back to the default.
 
-    fields_with_errors: list[str | int] = []
-
     try:
         cfg = Config(**args_dict)
     except ValidationError as e:
-        errs = e.errors()
-        err_string = "[default]The following errors were found in your configuration:"
-        for err in errs:
-            field_name = err["loc"][0]
-            if isinstance(field_name, str):
-                field_name = field_name.lower()
-            fields_with_errors.append(field_name)
-            err_string += f"\n    [yellow]{field_name}[default] is {err['type']}:  "
-            err_string += f"[bright_red]{err['msg']}"
-        for field_name in fields_with_errors:
-            if field_name in field_help_dict:
-                err_string += field_help_dict[field_name]
-        console_stderr.print(make_usage_error_panel(err_string, "Configuration Errors"))
+        _pydantic_error_panel(e)
         sys.exit(1)
     except tomllib.TOMLDecodeError as e:
         _toml_decoding_error_panel(e)
@@ -180,12 +154,52 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
             sys.exit(1)
 
     log.info("Config loaded successfully")
-    log.info(cfg)
-    provenance_str = "Config provenance:\n\n"
-    for field, source in cfg.provenance.items():
-        provenance_str += f"  {field}: {source}\n"
-    log.debug(cfg.provenance)
+    config_str = ""
+    for field, value in cfg.model_dump().items():
+        new_section = f"\n{field}: {value}"
+        new_section += " " * (35 - len(new_section))
+        new_section += f"(from {cfg.provenance[field]})"
+        config_str += new_section
+    log.info(config_str)
     return cfg
+
+
+
+field_help_dict = {
+    "api_key": (
+        "\n\n[default]You need to set a value for your TrueNAS API key. You can set "
+        "it in one of the following ways:\n"
+        f"  1. Using the [{COLORS.command}]set-key[default] command in the CLI\n"
+        f"  2. Using the [{COLORS.command}]--api-key[default] option in the CLI (see start --help)\n"
+        f"  3. As an environment variable [env: [{COLORS.envvar}]TRUENAS_API_KEY[default]=]\n"
+        "  4. In the config file (least secure)"
+    ),
+    "truenas_host": (
+        "\n\n[default]You need to set a value for your TrueNAS server's address. You "
+        "can set it in one of the following ways:\n"
+        "  1. In the config file\n"
+        f"  2. As an environment variable [env: [{COLORS.envvar}]TRUENAS_HOST[default]=]\n"
+        f"  3. Using the [{COLORS.command}]--truenas-host[default] option in the CLI (see start --help)"
+    ),
+}
+
+def _pydantic_error_panel(e: ValidationError) -> None:
+
+    fields_with_errors: list[str | int] = []
+
+    errs = e.errors()
+    err_string = "[default]The following errors were found in your configuration:"
+    for err in errs:
+        field_name = err["loc"][0]
+        if isinstance(field_name, str):
+            field_name = field_name.lower()
+        fields_with_errors.append(field_name)
+        err_string += f"\n    [yellow]{field_name}[default] is {err['type']}:  "
+        err_string += f"[bright_red]{err['msg']}"
+    for field_name in fields_with_errors:
+        if field_name in field_help_dict:
+            err_string += field_help_dict[field_name]
+    console_stderr.print(make_usage_error_panel(err_string, "Configuration Errors"))
 
 
 def _toml_decoding_error_panel(e: tomllib.TOMLDecodeError) -> None:
@@ -231,7 +245,5 @@ def _toml_decoding_error_panel(e: tomllib.TOMLDecodeError) -> None:
     if bad_line.count("'") == 1:
         err_string += "\nOnly found one singlequote(') mark in the line. "
         err_string += "Did you forget to close it?\n"
-    if bad_line.count("'") == 0 and bad_line.count('"') == 0:
-        err_string += "\nTip: does it need to be enclosed in quotes?\n"
 
     console_stderr.print(make_usage_error_panel(err_string))

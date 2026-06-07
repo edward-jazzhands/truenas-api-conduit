@@ -1,6 +1,5 @@
 from typing import Final
 import logging
-import copy
 from dataclasses import dataclass
 from rich.logging import RichHandler
 from truenas_api_conduit.console import console_stderr
@@ -8,6 +7,7 @@ from truenas_api_conduit.constants import APP_NAME
 
 TRACE: Final[int] = 5
 PACKAGE_NAME: Final[str] = APP_NAME.replace("-", "_")
+STARTING_LEVEL: Final[int] = logging.WARNING
 
 
 class TraceLogger(logging.Logger):
@@ -82,7 +82,7 @@ def init_logging():
     rich_handler_libraries.setFormatter(libformatter)
 
     root_logger = logging.getLogger()
-    root_logger.setLevel(logging.WARNING)
+    root_logger.setLevel(STARTING_LEVEL)
     root_logger.addHandler(rich_handler_normal)
 
     global _handlers_storage

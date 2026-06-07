@@ -3,6 +3,7 @@ from typing import Any
 import logging
 
 # third party
+import keyring
 from pydantic import (
     field_validator,
     field_serializer,
@@ -23,7 +24,7 @@ from pydantic_settings import (
 from truenas_api_conduit import log_setup
 from truenas_api_conduit.console import set_no_color
 from truenas_api_conduit.core import CONFIG_PATH
-from truenas_api_conduit.config.pydantic_sources import KeyringSettingsSource
+from truenas_api_conduit.config.pydantic_sources import KeyringSettingsSource, KeyringField
 from truenas_api_conduit.app_globals import is_config_frozen
 
 __all__ = ["Config"]
@@ -55,7 +56,14 @@ class TrackingSourceMixin:
             if key_lower not in _config_provenance:
                 _config_provenance[key_lower] = self.source_label
                 log.debug(f"{key_lower} was loaded from {self.source_label}")
-        log.debug(data)
+        if data.get("api_key"):
+            # This is straight from the source so it would display the API key
+            # if we didn't mask it manually here (its not a SecretStr yet)
+            data_copy = data.copy()
+            data_copy["api_key"] = "*" * 10
+            log.debug(data_copy)
+        else:
+            log.debug(data)
         return data
 
 
@@ -109,6 +117,12 @@ class Config(BaseSettings):
         if api_key is not None:
             log.debug("Found API key in init kwargs. Skipping keyring")
             skip = True
+        else:
+            from truenas_api_conduit.config.keyring_backends import FileEncrypter
+            # my custom fallback file encrypter keyring backend. This is set to
+            # lowest priority (0.0) so that it should only be used if no other
+            # keyring backends are available.
+            keyring.set_keyring(FileEncrypter())
 
         # Priority follows the order of the tuple:
         # 1. CLI flags passed into constructor
@@ -144,7 +158,7 @@ class Config(BaseSettings):
         default=None, validation_alias="TRUENAS_CERT_PATH"
     )
     validate_certs: bool = True
-    api_key: SecretStr = Field(default=..., json_schema_extra={"keyring": True})
+    api_key: SecretStr = KeyringField(default=...)  # custom field function
     api_route: str = "/api/current"
     log_level: str = "warning"
     no_color: bool = Field(default=False, validation_alias="NO_COLOR")
