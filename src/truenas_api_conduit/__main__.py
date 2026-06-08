@@ -21,6 +21,8 @@ from truenas_api_conduit.cli_helpers import (
     logging_setup,
     config_setup,
     make_usage_error_panel,
+    make_success_panel,
+    prompt_for_config,
 )
 from truenas_api_conduit.request_helper import get_request_helper
 
@@ -423,8 +425,11 @@ def request(
     assert ctx.console is not None
 
     request_helper = get_request_helper()
+    log.debug(request_helper)
     if not request_helper:
-        log.error("TrueNAS API Conduit service is not running")
+        console_stderr.print(
+            make_usage_error_panel("TrueNAS API Conduit service is not running")
+        )
         sys.exit(1)
 
     # NOTE: The TrueNAS API needs params to be in TRIPLE NESTED LISTS.
@@ -478,7 +483,7 @@ def request(
     )
 
     err_string = (
-        """\n[default]Filters must be in the format of FIELD OPERATOR VALUE\n"""
+        """\nFilters must be in the format of FIELD OPERATOR VALUE\n"""
         "Example: --filter name = sda\n"
         "See TrueNAS API reference for more info (Tip: use "
         f"[{COLORS.command}]truenas-api reference[default] "
@@ -507,9 +512,12 @@ def request(
                 try:
                     f2_int = int(f[2])  # type: ignore
                 except ValueError, TypeError:
-                    raise click.UsageError(
-                        f"{f[0]} value must be an integer. Got: {f[2]}"
+                    console_stderr.print(
+                        make_usage_error_panel(
+                            (f"{f[0]} value must be an integer. Got: {f[2]}")
+                        )
                     )
+                    sys.exit(1)
                 else:
                     f[2] = f2_int
 
@@ -518,21 +526,33 @@ def request(
     if params:
         log.debug("Raw params: %s", params)
         if params.find("“") != -1:
-            raise click.UsageError(
-                """You used the fancy smart quotes symbol (“) instead of the regular """
-                """doublequotes (")."""
+            console_stderr.print(
+                make_usage_error_panel(
+                    """You used the fancy smart quotes symbol (“) instead of the regular """
+                    """doublequotes (")."""
+                )
             )
+            sys.exit(1)
         if not params.strip().startswith("["):
-            raise click.UsageError("First character must be an opening bracket: [")
-        if params.strip()[1] == "'" or params.strip()[2] == "'":
-            raise click.UsageError(
-                """You must use double quotes inside the params list, and encase it """
-                """with single quotes. (ex: '[["name", "=", "sda"]]')"""
+            console_stderr.print(
+                make_usage_error_panel("First character must be an opening bracket: [")
             )
+            sys.exit(1)
+        if params.strip()[1] == "'" or params.strip()[2] == "'":
+            console_stderr.print(
+                make_usage_error_panel(
+                    """You must use double quotes inside the params list, and encase it """
+                    """with single quotes. (ex: '[["name", "=", "sda"]]')"""
+                )
+            )
+            sys.exit(1)
         try:
             params_list = json.loads(params)
         except json.JSONDecodeError as e:
-            raise click.UsageError(f"Malformed params: {params}\n{e}")
+            console_stderr.print(
+                make_usage_error_panel(f"Malformed params: {params}\n{e}")
+            )
+            sys.exit(1)
         log.info("Method: %s | Params list: %s", method, params_list)
 
     if filters_list or params_list:
@@ -541,7 +561,9 @@ def request(
         combined = []
     log.info("Full request params: %s", combined)
 
-    response = request_helper(core.Endpoints.RPC, {"method": method, "params": combined})
+    response = request_helper(
+        core.Endpoints.REQUEST, {"method": method, "params": combined}
+    )
     if ctx.obj.pretty:
         try:
             ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
@@ -570,8 +592,11 @@ def stop(ctx: click.RichContext) -> None:
     assert ctx.console is not None
 
     request_helper = get_request_helper()
+    log.debug(request_helper)
     if not request_helper:
-        log.error("TrueNAS API Conduit service is not running")
+        console_stderr.print(
+            make_usage_error_panel("TrueNAS API Conduit service is not running")
+        )
         sys.exit(1)
 
     response = request_helper(core.Endpoints.SHUTDOWN, {})  # needs empty dict to POST
@@ -603,8 +628,11 @@ def restart(ctx: click.RichContext) -> None:
     assert ctx.console is not None
 
     request_helper = get_request_helper()
+    log.debug(request_helper)
     if not request_helper:
-        log.error("TrueNAS API Conduit service is not running")
+        console_stderr.print(
+            make_usage_error_panel("TrueNAS API Conduit service is not running")
+        )
         sys.exit(1)
 
     response = request_helper(core.Endpoints.RESTART, {})
@@ -636,8 +664,11 @@ def status(ctx: click.RichContext) -> None:
     assert ctx.console is not None
 
     request_helper = get_request_helper()
+    log.debug(request_helper)
     if not request_helper:
-        log.error("TrueNAS API Conduit service is not running")
+        console_stderr.print(
+            make_usage_error_panel("TrueNAS API Conduit service is not running")
+        )
         sys.exit(1)
 
     response = request_helper(core.Endpoints.STATUS)
@@ -704,10 +735,14 @@ def set_key(
     assert isinstance(ctx.obj, CLIOptions)
     assert ctx.console is not None
 
+    prompt_for_config()
+    core.ensure_storage_dir()
+
     import keyring
     import keyring.errors as kr_errs
     import keyring.backend
     from truenas_api_conduit.core import CRYPT_KEY_FILE
+    from truenas_api_conduit.config.crypt_key import store_crypt_key
     from truenas_api_conduit.config.keyring_backends import (
         FileEncrypter,
         PasswordGetError,
@@ -731,31 +766,54 @@ def set_key(
     username = "api_key"
 
     action_desc = "<action>"
+    actions: list[str] = []
     try:
-        if delete:
-            log.info("Deleting API key from '%s'", current_backend.name)
-            action_desc = "delete API key from"
-            keyring.delete_password(service, username)
-            ctx.console.print("Deleted API key from keyring")
+        if delete or del_crypt:
+            if delete:
+                log.info("Deleting API key from '%s'", current_backend.name)
+                action_desc = "delete API key"
+                keyring.delete_password(service, username)
+                log.debug("Deleted API key from keyring")
+                actions.append(action_desc)
             if del_crypt:
-                CRYPT_KEY_FILE.unlink()
-                ctx.console.print(f"Deleted crypt key file ({CRYPT_KEY_FILE})")
-        elif del_crypt:
-            log.info("Deleting crypt key file")
-            action_desc = "delete crypt key file"
-            CRYPT_KEY_FILE.unlink()
-            ctx.console.print(f"Deleted crypt key file ({CRYPT_KEY_FILE})")
+                action_desc = "delete crypt key file"
+                if not CRYPT_KEY_FILE.exists():
+                    if delete:
+                        log.error(f"No crypt key file found ({CRYPT_KEY_FILE})")
+                    else:
+                        ctx.console.print(
+                            make_usage_error_panel(
+                                "No crypt key file found", "Keyring Error"
+                            )
+                        )
+                else:
+                    log.info("Deleting crypt key file")
+                    action_desc = "delete crypt key file"
+                    CRYPT_KEY_FILE.unlink()
+                    log.debug(f"Deleted crypt key file ({CRYPT_KEY_FILE})")
+                    actions.append(action_desc)
         elif show:
             log.info("Showing API key from '%s'", current_backend.name)
-            action_desc = "show API key from"
+            action_desc = "show API key"
             api_key = keyring.get_password(service, username)
-            ctx.console.print(api_key)
+            if api_key:
+                ctx.console.print(api_key)
+                actions.append(action_desc)
+            else:
+                ctx.console.print(
+                    make_usage_error_panel("No API key found in keyring", "Keyring Error")
+                )
         else:
             log.info("Setting API key in '%s'", current_backend.name)
-            action_desc = "set API key in"
+            action_desc = "set API key"
             api_key = click.prompt("Enter your TrueNAS API key", hide_input=True)
             keyring.set_password(service, username, api_key)
-            ctx.console.print("Success: key set")
+            log.debug("Success: key set")
+            actions.append(action_desc)
+            if current_backend.name.find("FileEncrypter"):
+                action_desc = "store crypt key in file"
+                if store_crypt_key(api_key):
+                    actions.append(action_desc)
     except click.Abort:
         raise
     except PasswordGetError as e:
@@ -770,17 +828,10 @@ def set_key(
             )
             pass
         elif e.err_code == GetErrorEnum.VAULT_FILE_NOT_FOUND:
-            err_string = "[default]" + (
-                f"Key is not set for: [{COLORS.envvar}]{service}.{username}"
-            )
+            err_string = f"Key is not set for: [{COLORS.envvar}]{service}.{username}"
             pass
-        elif e.err_code == GetErrorEnum.SALT_FILE_NOT_FOUND:
-            err_string = "[default]" + (
-                f"No salt file found for: [{COLORS.envvar}]{service}.{username}[default] "
-                "-- the key is not retrievable. Please delete the key and set it again."
-            )
         elif e.err_code == GetErrorEnum.INCORRECT_ENCRYPTION_KEY:
-            err_string = "[default]The encryption key you have entered is incorrect."
+            err_string = "The encryption key you have entered is incorrect."
         elif e.err_code == GetErrorEnum.GENERIC_ERROR:
             # This would indicate a bug in the program
             raise
@@ -796,17 +847,26 @@ def set_key(
         kr_errs.PasswordSetError,
         kr_errs.PasswordDeleteError,
     ) as e:
-        err_string = "[default]" + str(e)
+        err_string = str(e)
         console_stderr.print(make_usage_error_panel(err_string, "Keyring Error"))
         if ctx.obj.verbose >= 3:
             raise
     except FileNotFoundError as e:
-        err_string = "[default]" + str(e)
-        console_stderr.print(make_usage_error_panel(err_string, "Error"))
+        err_string = str(e)
+        console_stderr.print(make_usage_error_panel(err_string, "File Error"))
     except Exception as e:
-        log.error("Could not %s keyring: (%s) | %s", action_desc, e.__class__.__name__, e)
+        log.error("Failed keyring action: %s (%s) | %s", action_desc, e.__class__.__name__, e)
         if ctx.obj.verbose >= 3:
             raise
+    else:
+        if actions:
+            success_string = ""
+            for i, action in enumerate(actions):
+                success_string += f"Success: {action}"
+                if i < len(actions) - 1:
+                    success_string += "\n"
+            ctx.console.print(make_success_panel(success_string))
+
 
 
 config_help = f"""Attempts to open the config file in your editor, if
@@ -815,17 +875,24 @@ config_help = f"""Attempts to open the config file in your editor, if
 
 @cli.command(help=config_help)
 @common_options
-def config() -> None:
+@click.pass_context
+def config(ctx: click.RichContext) -> None:
+
+    logging_setup(ctx)
+    assert ctx.console is not None
+    ctx.console.no_color = True
+
+    prompt_for_config()
 
     editor = os.environ.get("EDITOR")
     if editor:
         os.execvp(editor, [editor, core.CONFIG_PATH])
     else:
         err_string = (
-            f"[default]No editor set. Set the [{COLORS.envvar}]$EDITOR[default] "
+            f"No editor set. Set the [{COLORS.envvar}]$EDITOR[default] "
             "environment variable"
         )
-        console_stderr.print(make_usage_error_panel(err_string))
+        console_stderr.print(make_usage_error_panel(err_string), "Config Error")
         sys.exit(1)
 
 
@@ -837,8 +904,10 @@ def config_path(ctx: click.RichContext) -> None:
 
     logging_setup(ctx)
     assert ctx.console is not None
-    ctx.console.no_color = True
 
+    prompt_for_config()
+
+    ctx.console.no_color = True
     ctx.console.print(core.CONFIG_PATH)  # stdout for piping
     console_stderr.print(f"Created already?: {core.CONFIG_PATH.exists()}")
     console_stderr.print(
@@ -850,7 +919,7 @@ def config_path(ctx: click.RichContext) -> None:
 
 print_config_help_short = f"""Validate and output your current configuration as
 JSON to stdout
-([{COLORS.command}]print_config --help[default] for more info)"""
+([{COLORS.command}]print-config --help[default] for more info)"""
 
 print_config_help = f"""Output your current configuration as JSON to
 stdout. If you use the [{COLORS.command}]--unmask[default] option, then this
@@ -871,6 +940,8 @@ def print_config(ctx: click.RichContext, unmask: bool = False) -> None:
 
     logging_setup(ctx)
     assert ctx.console is not None
+
+    prompt_for_config()
 
     cfg = config_setup(ctx.obj, unmask=unmask)
     json_dict = cfg.model_dump_json(indent=2, context={"unmask": unmask})
@@ -908,14 +979,31 @@ def cheatsheet(ctx: click.RichContext) -> None:
     )
 
 
-@cli.command()
+reference_help = """Print the URL to the TrueNAS API reference on your server
+(requires your config to be set up)"""
+
+
+@cli.command(help=reference_help)
 @common_options
 @click.pass_context
 def reference(ctx: click.RichContext) -> None:
-    """Print the URL to the TrueNAS API reference on your server"""
 
     logging_setup(ctx)
     assert ctx.console is not None
+
+    if not core.CONFIG_DIR.exists():
+        console_stderr.print(
+            make_usage_error_panel(
+                "The config directory has not been created yet", "Config Error"
+            )
+        )
+        sys.exit(1)
+
+    if not core.CONFIG_PATH.exists():
+        console_stderr.print(
+            make_usage_error_panel("Config file not found", "Config Error")
+        )
+        sys.exit(1)
 
     cfg = config_setup(ctx.obj)
 

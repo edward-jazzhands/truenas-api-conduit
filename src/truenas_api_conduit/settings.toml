@@ -5,15 +5,16 @@
 
 # Configuration precedence (Highest priority to lowest):
 #     1. CLI options            (Overrides everything else)
+#     2. Secrets Manager        (Overrides env vars)
 #     2. Environment variables  (Overrides config file)
-#     3. Config file
+#     3. Config file            (Overrides default values)
 #     4. Default values         (Used if no other source is provided)
 
 # NOTE: Settings marked (REQUIRED) have no default value. If they are 
 # not supplied here, via an environment variable, or via the CLI, 
 # the program will fail to start and display a validation error.
 
-# -------------------------------------------------------------------
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 # (REQUIRED) The address that you use to access the TrueNAS Web UI over HTTPS, 
 # without the "https://" prefix.
@@ -25,7 +26,7 @@
 
 # truenas_host = "192.168.1.xxx:443"
 
-# -------------------------------------------------------------------
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 # (REQUIRED) Your TrueNAS API key.
 # WARNING: Storing API keys in plain text can be a security risk.
@@ -38,7 +39,7 @@
 
 # api_key = "1234567890"
 
-# -------------------------------------------------------------------
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 # The path to the TrueNAS certificate file. This is required if you use a
 # self-signed certificate. If you use a certificate signed by a trusted CA,
@@ -48,7 +49,7 @@
 
 # truenas_cert_path = "/path/to/your/cert.crt"
 
-# -------------------------------------------------------------------
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 # Set this to false to skip certificate validation. This is not recommended, as
 # it's better to use a self-signed certificate. However, this does allow you to
@@ -58,7 +59,7 @@
 
 # validate_certs = true
 
-# -------------------------------------------------------------------
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 # Setting log level is equivalent to using the --verbose flag on the CLI.
 # -v = info, -vv = debug, -vvv = trace
@@ -68,7 +69,7 @@
 
 # log_level = "warning"
 
-# -------------------------------------------------------------------
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 # Set to true to disable color output. This is equivalent to using the
 # --no-color flag on the CLI. NOTE: this does not affect the help menus.
@@ -79,7 +80,7 @@
 
 # no_color = false
 
-# -------------------------------------------------------------------
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 # The internal socket port for the TrueNAS API Conduit service. This is used
 # by the CLI to send requests to the service. It's arbitrary and you can
@@ -89,7 +90,7 @@
 
 # socket_port = 4567
 
-# -------------------------------------------------------------------
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 # The address which the service will serve the local HTTP REST server on.
 #     Default: "localhost"
@@ -97,7 +98,7 @@
 
 # service_address = "localhost"
 
-# -------------------------------------------------------------------
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 # This is only intended for future-proofing, in case the API route ever 
 # changes. This must match what your TrueNAS server currently uses.
@@ -106,4 +107,15 @@
 
 # api_route = "/api/current"
 
-# -------------------------------------------------------------------
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+# You can set a request header to be required for all requests to the
+# service. This can add an extra layer of security because scripts
+# will need to know what the header is in order to make requests
+# (ie. curl, etc.). The included CLI will use this automatically if set.
+#     Default: None
+#     Equivalent Environment Var: TRUENAS_REQUEST_HEADER
+
+# request_header = "My Request Header"
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

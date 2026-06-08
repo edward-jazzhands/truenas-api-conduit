@@ -9,7 +9,6 @@ from pydantic_settings import BaseSettings, PydanticBaseSettingsSource
 import keyring
 import keyring.backend
 
-
 log = logging.getLogger(__name__)
 
 
@@ -23,7 +22,7 @@ log = logging.getLogger(__name__)
 
 def KeyringField(*args, **kwargs) -> SecretStr:
     "Note this MUST be assigned to a SecretStr field"
-    
+
     extra: dict = {"keyring": True}
     if caller_extra := kwargs.pop("json_schema_extra", None):
         if not isinstance(caller_extra, dict):
@@ -168,9 +167,7 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
             log.error(f"Could not get password from keyring: {e}")
             raise
         except Exception as e:
-            log.error(
-                f"Unexpected error while trying to get password from keyring: {e}"
-            )
+            log.error(f"Unexpected error while trying to get password from keyring: {e}")
             raise
         else:
             # Under normal circumstances, keyring.get_password() will just return

@@ -4,6 +4,10 @@
 [ ] Write first version of dockerfile for the containerized service
 [ ] Make logging change to stdout when running in the service
 [ ] Make prompt for encryption key retry on wrong key
+[X] Add optional request header requirement for the service
+[X] Have the config command check if the config file exists before opening
+[X] Combine salt file into corresponding vault file
+[X] Build system to change the address the service listens on
 [X] Separate concerns between the Keyring Source and the FileEncrypter backend, also make it more generally reusable
 [X] Build system to store crypt key in a file and use it automatically
 [X] Write keyring FileEncrypter backend

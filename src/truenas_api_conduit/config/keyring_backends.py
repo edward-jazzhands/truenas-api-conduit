@@ -22,9 +22,10 @@ from truenas_api_conduit.errors import ConduitError
 from truenas_api_conduit.core import STORAGE_DIR
 from truenas_api_conduit.console import console_stderr
 from truenas_api_conduit.constants import COLORS
-from truenas_api_conduit.config.crypt_key import store_crypt_key, get_crypt_key
+from truenas_api_conduit.config.crypt_key import get_crypt_key
 
 SECRETS_DIR: Final[Path] = STORAGE_DIR / "secrets"
+SALT_LENGTH: Final[int] = 16
 
 __all__ = [
     "FileEncrypter",
@@ -37,7 +38,6 @@ log = logging.getLogger(__name__)
 
 class GetErrorEnum(Enum):
     VAULT_FILE_NOT_FOUND = 1
-    SALT_FILE_NOT_FOUND = 2
     INCORRECT_ENCRYPTION_KEY = 2
     GENERIC_ERROR = 3
     NOT_A_TTY = 4
@@ -98,20 +98,22 @@ class FileEncrypter(KeyringBackend):
         # expected behavior of a keyring backend is to silently overwrite any
         # existing passwords.
         vault_file: Path = self._get_vault_file(service, username)
-        salt_file = vault_file.with_suffix(".salt")
-        self._ensure_salt_file(salt_file)
+        
+        # The salt is generated once for every new secret added to the keyring.
+        # It does not need to be secret, its only job is to be unique so that the same
+        # password produces a different derived key on each machine.
+        salt = os.urandom(SALT_LENGTH)
 
         # Derive the encryption key from the user's password + salt, then hand it
         # to Fernet which handles the actual AES encryption and HMAC authentication.
         try:
-            f = Fernet(self._derive_key(salt_file.read_bytes(), service, username))
+            f = Fernet(self._derive_key(salt, service, username))
             # Each call to Fernet.encrypt() generates a new random initialization vector
-            vault_file.write_bytes(f.encrypt(password.encode()))
-            vault_file.chmod(0o600)
+            vault_file.write_bytes(salt + f.encrypt(password.encode()))
+            vault_file.chmod(0o600)  # HACK: This won't do anything on windows.
         except Exception as e:
             log.error("Could not set password in keyring: %s", e)
             raise PasswordSetError(f"Could not set password in keyring: {e}") from e
-
 
     def get_password(self, service: str, username: str) -> str | None:
         try:
@@ -122,18 +124,17 @@ class FileEncrypter(KeyringBackend):
     def _get_password(self, service: str, username: str) -> str | None:
 
         vault_file: Path = self._get_vault_file(service, username)
-        salt_file = vault_file.with_suffix(".salt")
 
         if not vault_file.exists():
             raise PasswordGetError(err_code=GetErrorEnum.VAULT_FILE_NOT_FOUND)
-        else:
-            if not salt_file.exists():
-                raise PasswordGetError(err_code=GetErrorEnum.SALT_FILE_NOT_FOUND)
+
+        vbytes = vault_file.read_bytes()
+        salt, ciphertext = vbytes[:SALT_LENGTH], vbytes[SALT_LENGTH:]
 
         # Use password + salt file to reproduce the Fernet
         try:
-            f = Fernet(self._derive_key(salt_file.read_bytes(), service, username))
-            return f.decrypt(vault_file.read_bytes()).decode()
+            f = Fernet(self._derive_key(salt, service, username))
+            return f.decrypt(ciphertext).decode()
         except (InvalidToken, EOFError) as e:
             raise PasswordGetError(err_code=GetErrorEnum.INCORRECT_ENCRYPTION_KEY) from e
         except NotATTYError as e:
@@ -145,13 +146,11 @@ class FileEncrypter(KeyringBackend):
     def delete_password(self, service: str, username: str):
 
         vault_file: Path = self._get_vault_file(service, username)
-        salt_file = vault_file.with_suffix(".salt")
 
         # The one key/one file system makes things easy here, we just delete the files
         if vault_file.exists():
             try:
                 vault_file.unlink(missing_ok=True)
-                salt_file.unlink(missing_ok=True)
             except Exception as e:
                 log.error("Could not delete password from keyring: %s", e)
                 raise PasswordDeleteError(
@@ -195,22 +194,10 @@ class FileEncrypter(KeyringBackend):
             crypt_key = getpass.getpass(stream=sys.stderr)
             self.crypt_key = SecretStr(crypt_key)
             del crypt_key
-            store_crypt_key(self.crypt_key)
             return self.crypt_key.get_secret_value()
         else:
             raise NotATTYError("No env var set and stdin is not a TTY")
 
-    @staticmethod
-    def _ensure_salt_file(salt_file: Path) -> None:
-
-        # The salt is generated once for every new secret added to the keyring.
-        # It does not need to be secret, its only job is to be unique so that the same
-        # password produces a different derived key on each machine.
-        if not salt_file.exists():
-            tmp = salt_file.with_suffix(".tmp")
-            tmp.write_bytes(os.urandom(16))
-            tmp.replace(salt_file)
-            salt_file.chmod(0o600)
 
     @staticmethod
     def _get_vault_file(service: str, username: str) -> Path:
@@ -225,7 +212,9 @@ class FileEncrypter(KeyringBackend):
         return SECRETS_DIR / safe_name
 
     @staticmethod
-    def _handle_password_get_error(e: PasswordGetError, service: str, username: str) -> None:
+    def _handle_password_get_error(
+        e: PasswordGetError, service: str, username: str
+    ) -> None:
 
         # This is my custom error class so it will only happen if keyring tried
         # to use my fallback FileEncrypter backend, and the user password was
@@ -239,29 +228,8 @@ class FileEncrypter(KeyringBackend):
         elif e.err_code == GetErrorEnum.VAULT_FILE_NOT_FOUND:
             log.debug("No vault file found for: %s.%s", service, username)
             return
-        elif e.err_code == GetErrorEnum.SALT_FILE_NOT_FOUND:
-            console_stderr.print(
-                f"No salt file found for: {service}.{username}\n"
-                "The key is not retrievable. Please delete the key and set it again."
-                "\nDo you want to continue, or exit the program?",
-            )
-            answer = input("Enter 'y' to continue. Anything else will exit:  ")
-            if answer.lower() == "y":
-                return
-            else:
-                sys.exit(1)
         elif e.err_code == GetErrorEnum.INCORRECT_ENCRYPTION_KEY:
-            console_stderr.print(
-                "The encryption key you have entered is incorrect. The program "
-                "will fall back to reading the API key from a different source. "
-                "Otherwise you must exit and restart to enter your encryption "
-                "key again. \nDo you want to continue, or exit the program?"
-            )
-            answer = input("Enter 'y' to continue. Anything else will exit:  ")
-            if answer.lower() == "y":
-                return
-            else:
-                sys.exit(1)
+            raise
         elif e.err_code == GetErrorEnum.GENERIC_ERROR:
             # This would indicate a bug in the program
             raise

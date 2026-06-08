@@ -9,7 +9,7 @@ from truenas_api_conduit.console import console_stderr
 import click
 
 # project
-from truenas_api_conduit.core import CONFIG_DIR, CRYPT_KEY_FILE
+from truenas_api_conduit.core import CONFIG_DIR, CRYPT_KEY_FILE, SLASH
 from truenas_api_conduit.constants import COLORS
 
 log = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ log = logging.getLogger(__name__)
 # crypt_keys dict.
 
 
-def store_crypt_key(v: SecretStr) -> None:
+def store_crypt_key(v: SecretStr) -> bool | None:
 
     if CRYPT_KEY_FILE.exists():
         return
@@ -51,7 +51,8 @@ def store_crypt_key(v: SecretStr) -> None:
         f"  2. Creating a file named [{COLORS.envvar}].crypt[default] "
         "in your config directory containing the encryption key "
         f"(set [{COLORS.command}]chmod 600[default])\n\n"
-        f"[default]On your machine, the config directory is: {CONFIG_DIR}\n"
+        f"[default]On your machine, it would look for this file at: "
+        f"{CONFIG_DIR}{SLASH}.crypt\n"
         "Choosing yes will perform option 2 for you."
     )
     answer = click.prompt("Enter 'y' to create the .crypt file")
@@ -64,8 +65,10 @@ def store_crypt_key(v: SecretStr) -> None:
         CRYPT_KEY_FILE.write_text(v)
     else:
         assert_never(v)
-    CRYPT_KEY_FILE.chmod(0o600)
+
+    CRYPT_KEY_FILE.chmod(0o600)  # HACK: This won't do anything on windows.
     console_stderr.print("Success: encryption key written to file")
+    return True
 
 
 def get_crypt_key() -> SecretStr | None:

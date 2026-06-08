@@ -6,5 +6,4 @@ __all__ = [
     "LOCK_FILE",
     "__version__",
     "log_setup",
-    "ProgrammerError",
 ]

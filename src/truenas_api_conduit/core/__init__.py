@@ -37,6 +37,8 @@ def detect() -> Platform:
 
 PLATFORM: Final[Platform] = detect()
 
+SLASH: Final[str] = "/" if PLATFORM == Platform.LINUX else "\\"
+
 # NOTE: It does not make sense to use platformdirs here because the config file
 # must be edited manually by the user. On Windows and MacOS, the conventional
 # app data directories are hidden from users by default, so average users

@@ -15,9 +15,9 @@ class InstallType(Enum):
 
 class Endpoints(StrEnum):
     # this is a string enum because its used to build the URL like this:
-    # f"http://127.0.0.1:{self.port}{endpoint}",
+    # f"http://{self.address}:{self.port}{endpoint}",
 
-    RPC = "/rpc"
+    REQUEST = "/request"
     STATUS = "/status"
     SHUTDOWN = "/shutdown"
     RESTART = "/restart"

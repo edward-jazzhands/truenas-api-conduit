@@ -47,8 +47,13 @@ class CLIOptions:
 
 
 def make_usage_error_panel(err_string: str, title: str = "Usage Error") -> Panel:
+    err_string = "[default]" + err_string
     return Panel(err_string, title=title, title_align="left", style="bright_red")
 
+
+def make_success_panel(msg: str, title: str = "Success") -> Panel:
+    msg = "[default]" + msg
+    return Panel(msg, title=title, title_align="left", style="bright_green")
 
 def logging_setup(ctx: click.RichContext) -> None:
 
@@ -82,6 +87,16 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
     log_level: int = logging.getLogger().level
     level_name = logging.getLevelName(log_level)
     log_mapping = logging.getLevelNamesMapping()
+
+    if not core.CONFIG_PATH.exists():
+        if not cli_options.api_key or not cli_options.truenas_host:
+            log.warning(
+                "The config file has not been created yet, it's probably "
+                "your first time starting the service. If your server address "
+                "and API key are not set yet through other means, the service "
+                "will fail to start. You can find the config file through "
+                "the config commands."
+            )
 
     # NOTE: Remember that the config file/dir must be ensured before trying to
     # import the user_config module:
@@ -164,24 +179,26 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
     return cfg
 
 
-
 field_help_dict = {
-    "api_key": (
-        "\n\n[default]You need to set a value for your TrueNAS API key. You can set "
-        "it in one of the following ways:\n"
-        f"  1. Using the [{COLORS.command}]set-key[default] command in the CLI\n"
-        f"  2. Using the [{COLORS.command}]--api-key[default] option in the CLI (see start --help)\n"
-        f"  3. As an environment variable [env: [{COLORS.envvar}]TRUENAS_API_KEY[default]=]\n"
-        "  4. In the config file (least secure)"
-    ),
     "truenas_host": (
         "\n\n[default]You need to set a value for your TrueNAS server's address. You "
         "can set it in one of the following ways:\n"
         "  1. In the config file\n"
         f"  2. As an environment variable [env: [{COLORS.envvar}]TRUENAS_HOST[default]=]\n"
-        f"  3. Using the [{COLORS.command}]--truenas-host[default] option in the CLI (see start --help)"
+        f"  3. Using the [{COLORS.command}]--truenas-host[default] option in the CLI "
+        f"(see [{COLORS.command}]start --help[default])"
+    ),
+    "api_key": (
+        "\n\n[default]You need to set a value for your TrueNAS API key. You can set "
+        "it in one of the following ways:\n"
+        f"  1. Using the [{COLORS.command}]set-key[default] command in the CLI\n"
+        f"  2. Using the [{COLORS.command}]--api-key[default] option in the CLI "
+        f"(see [{COLORS.command}]start --help[default])\n"
+        f"  3. As an environment variable [env: [{COLORS.envvar}]TRUENAS_API_KEY[default]=]\n"
+        "  4. In the config file (least secure)"
     ),
 }
+
 
 def _pydantic_error_panel(e: ValidationError) -> None:
 
@@ -199,6 +216,11 @@ def _pydantic_error_panel(e: ValidationError) -> None:
     for field_name in fields_with_errors:
         if field_name in field_help_dict:
             err_string += field_help_dict[field_name]
+    err_string += (
+        f"\n\n[default]You can use the [{COLORS.command}]config[default] "
+        f"and [{COLORS.command}]config-path[default] commands to edit/find your "
+        "config file"
+    )
     console_stderr.print(make_usage_error_panel(err_string, "Configuration Errors"))
 
 
@@ -247,3 +269,31 @@ def _toml_decoding_error_panel(e: tomllib.TOMLDecodeError) -> None:
         err_string += "Did you forget to close it?\n"
 
     console_stderr.print(make_usage_error_panel(err_string))
+
+
+def prompt_for_config() -> None:
+
+    if not core.CONFIG_DIR.exists():
+        console_stderr.print(
+            "The config directory has not been created yet. Do you want "
+            "to create it now? (y/n)"
+        )
+        answer = click.prompt("Enter 'y' to create the config directory")
+        if answer.lower() not in ("y", "yes"):
+            console_stderr.print("Cancelled")
+            sys.exit(1)
+        else:
+            core.ensure_config()
+
+    if not core.CONFIG_PATH.exists():
+        console_stderr.print(
+            "The config file is missing. Do you want to create a new one "
+            "with the default settings? (y/n)"
+        )
+        answer = click.prompt("Enter 'y' to create the config file")
+        if answer.lower() not in ("y", "yes"):
+            console_stderr.print("Cancelled")
+            sys.exit(1)
+        else:
+            core.ensure_config()
+        sys.exit(1)

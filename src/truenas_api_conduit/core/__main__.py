@@ -5,7 +5,8 @@ import sys
 import logging
 import signal
 import asyncio
-from typing import TYPE_CHECKING
+from enum import Enum
+from typing import TYPE_CHECKING, assert_never
 
 if TYPE_CHECKING:
     # ws_client contains the import for the websockets library so we gain
@@ -46,6 +47,31 @@ log_setup.set_log_level(logging.DEBUG)
 log = logging.getLogger(__name__)
 
 
+class RequestHeader(Enum):
+    NONE = 0
+    MISSING = 1
+    INCORRECT = 2
+    CORRECT = 3
+
+
+def check_request_header(request: web.Request) -> RequestHeader:
+    "Check if the request has the required header"
+
+    looking_for: str | None = request.app["config"].request_header
+
+    if looking_for is None:  # this means there is no required header
+        return RequestHeader.NONE
+    else:
+        if incoming_header := request.headers.get(APP_NAME):
+            log.info("Found incoming header: %s", incoming_header)
+            if incoming_header == looking_for:
+                return RequestHeader.CORRECT
+            else:
+                return RequestHeader.INCORRECT
+        else:
+            return RequestHeader.MISSING
+
+
 # in Aiohttp, the callback endpoint functions must always take a web.Request
 # object as the only argument.
 
@@ -53,9 +79,19 @@ log = logging.getLogger(__name__)
 async def request_handler(request: web.Request) -> web.Response:
     "Take request in json-rpc, return response in json-rpc"
 
-    # This is the callback for the /rpc endpoint
-    # The API for the client is simple. We only need to create the client,
-    # run client.connect(), then it can be called as an awaitable function.
+    # This is the callback for the /request endpoint
+    # The API for the client is simple. The client class can be
+    # called as an awaitable function.
+
+    log.info("Request received")
+
+    header = check_request_header(request)
+    if header == RequestHeader.MISSING:
+        log.warning("Request did not have the required header")
+        return web.json_response({"error": "Missing header"}, status=400)
+    elif header == RequestHeader.INCORRECT:
+        log.warning("Request had the wrong header")
+        return web.json_response({"error": "Incorrect header"}, status=400)
 
     try:
         payload = await request.json()  # JSON-RPC payload
@@ -63,7 +99,7 @@ async def request_handler(request: web.Request) -> web.Response:
         log.error("Malformed request, skipping: %s", e)
         return web.json_response({"error": "Malformed request"}, status=400)
 
-    log.info("Request received: %s", payload)
+    log.info("Request payload: %s", payload)
 
     client: TrueNASClient = request.app["truenas"]
     result = await client(payload)
@@ -78,6 +114,15 @@ async def status(request: web.Request) -> web.Response:
     "Check the status of the TrueNAS API Conduit service"
 
     log.info("Status request received")
+
+    header = check_request_header(request)
+    if header == RequestHeader.MISSING:
+        log.warning("Request did not have the required header")
+        return web.json_response({"error": "Missing header"}, status=400)
+    elif header == RequestHeader.INCORRECT:
+        log.warning("Request had the wrong header")
+        return web.json_response({"error": "Incorrect header"}, status=400)
+
     client: TrueNASClient = request.app["truenas"]
     result = await client.status()
     log.info("Status request successful")
@@ -87,6 +132,14 @@ async def status(request: web.Request) -> web.Response:
 async def shutdown(request: web.Request) -> web.Response:
 
     log.info("Shutdown command received")
+
+    header = check_request_header(request)
+    if header == RequestHeader.MISSING:
+        log.warning("Request did not have the required header")
+        return web.json_response({"error": "Missing header"}, status=400)
+    elif header == RequestHeader.INCORRECT:
+        log.warning("Request had the wrong header")
+        return web.json_response({"error": "Incorrect header"}, status=400)
 
     async def _shutdown() -> None:
         await asyncio.sleep(0.2)
@@ -99,6 +152,14 @@ async def shutdown(request: web.Request) -> web.Response:
 async def restart(request: web.Request) -> web.Response:
 
     log.info("Restart command received")
+
+    header = check_request_header(request)
+    if header == RequestHeader.MISSING:
+        log.warning("Request did not have the required header")
+        return web.json_response({"error": "Missing header"}, status=400)
+    elif header == RequestHeader.INCORRECT:
+        log.warning("Request had the wrong header")
+        return web.json_response({"error": "Incorrect header"}, status=400)
 
     async def _restart() -> None:
         await asyncio.sleep(0.2)
@@ -131,16 +192,22 @@ async def start_truenas(app: web.Application) -> None:
     await client.connect()  #  will handle the auth process
 
     if os.path.exists(LOCK_FILE):
-        log.debug("Lockfile was not properly cleaned up after last run")
+        log.warning("Lockfile was not properly cleaned up after last run")
 
     cfg_dict = {
         "pid": os.getpid(),
+        "address": cfg.service_address,
         "socket_port": cfg.socket_port,
+        "header": cfg.request_header,
     }
 
     with open(LOCK_FILE, "w") as f:
         f.write(json.dumps(cfg_dict, indent=2))
 
+    # windows ACLs are a pain and would require an entire third party library
+    # just for this purpose. So windows users just get slightly shittier security.
+    # Thats the way she goes bubs.
+    LOCK_FILE.chmod(0o600)  # HACK: This won't do anything on windows.
 
 async def stop_truenas(app: web.Application) -> None:
 
@@ -162,7 +229,7 @@ async def main(cfg: Config) -> None:
     app["config"] = cfg
 
     # HTTP endpoints for the CLI
-    app.router.add_post("/rpc", request_handler)
+    app.router.add_post("/request", request_handler)
     app.router.add_get("/status", status)
     app.router.add_post("/shutdown", shutdown)
     app.router.add_post("/restart", restart)
@@ -210,7 +277,7 @@ def start():
             raw = sys.stdin.read()
         if raw:
             log.info("Detected input on stdin, loading from stdin")
-            log.debug("Raw config: %s", raw) #! FIXME: DELETE THIS
+            log.debug("Raw config: %s", raw)  #! FIXME: DELETE THIS
             cfg = Config.model_validate_json(raw)
         else:
             log.info("No input on stdin, loading normally")

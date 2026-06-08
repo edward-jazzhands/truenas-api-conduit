@@ -24,7 +24,10 @@ from pydantic_settings import (
 from truenas_api_conduit import log_setup
 from truenas_api_conduit.console import set_no_color
 from truenas_api_conduit.core import CONFIG_PATH
-from truenas_api_conduit.config.pydantic_sources import KeyringSettingsSource, KeyringField
+from truenas_api_conduit.config.pydantic_sources import (
+    KeyringSettingsSource,
+    KeyringField,
+)
 from truenas_api_conduit.app_globals import is_config_frozen
 
 __all__ = ["Config"]
@@ -119,6 +122,7 @@ class Config(BaseSettings):
             skip = True
         else:
             from truenas_api_conduit.config.keyring_backends import FileEncrypter
+
             # my custom fallback file encrypter keyring backend. This is set to
             # lowest priority (0.0) so that it should only be used if no other
             # keyring backends are available.
@@ -164,6 +168,7 @@ class Config(BaseSettings):
     no_color: bool = Field(default=False, validation_alias="NO_COLOR")
     socket_port: int = 4567
     service_address: str = "localhost"
+    request_header: str | None = None
 
     # Internal settings
 

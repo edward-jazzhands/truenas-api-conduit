@@ -189,13 +189,13 @@ table3.add_row(
 )
 # =============
 table3.add_row(
-    r"""curl -X POST localhost:4567/rpc -H 'Content-Type: application/json' -d '{"method": "core.ping", "params": []}' """,
+    r"""curl -X POST localhost:4567/request -d '{"method": "core.ping", "params": []}' """,
     style=command_style,
 )
 table3.add_row("Simple ping", style=desc_style, end_section=True)
 # =============
 table3.add_row(
-    r"""curl -X POST localhost:4567/rpc -H 'Content-Type: application/json' -d '{"method": "disk.query", "params": [[["name", "=", "sda"]]]}' | jq """,
+    r"""curl -X POST localhost:4567/request -d '{"method": "disk.query", "params": [[["name", "=", "sda"]]]}' | jq """,
     style=command_style,
 )
 table3.add_row(
@@ -203,7 +203,7 @@ table3.add_row(
 )
 # =============
 table3.add_row(
-    r"""curl -X POST localhost:4567/rpc -H 'Content-Type: application/json' -d '{"method": "pool.query", "params": []}' | jq '.result[] | select(.warning == true)'""",
+    r"""curl -X POST localhost:4567/request -d '{"method": "pool.query", "params": []}' | jq '.result[] | select(.warning == true)'""",
     style=command_style,
 )
 table3.add_row(
@@ -213,7 +213,7 @@ table3.add_row(
 )
 
 table3.add_row(
-    r"""curl -X POST localhost:4567/rpc -H 'Content-Type: application/json' -d '{"method": "pool.query", "params": []}' | jq '.result[] | select(.free < 1000000)'""",
+    r"""curl -X POST localhost:4567/request -d '{"method": "pool.query", "params": []}' | jq '.result[] | select(.free < 1000000)'""",
     style=command_style,
 )
 table3.add_row(
