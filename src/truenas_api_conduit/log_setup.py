@@ -111,7 +111,7 @@ def set_log_level(level: int) -> None:
         logging.getLogger().handlers = [_handlers_storage.normal]
 
 
-def enable_timestamps_on_normal() -> None:
+def enable_timestamps() -> None:
 
     if _handlers_storage is None:
         raise RuntimeError("Logging not initialized")

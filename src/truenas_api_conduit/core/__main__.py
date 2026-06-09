@@ -54,19 +54,6 @@ class RequestHeader(Enum):
     CORRECT = 3
 
 
-def error_handler(err_string: str, log_level: str):
-
-    if log_level.lower() == "debug":
-        log.exception(err_string)
-        sys.exit(1)
-    elif log_level.lower() == "trace":
-        log.error(err_string)
-        raise
-    else:
-        log.error(err_string)
-        sys.exit(1)
-
-
 def check_request_header(request: web.Request) -> RequestHeader:
     "Check if the request has the required header"
 
@@ -141,10 +128,12 @@ async def status(request: web.Request) -> web.Response:
     log.info("Status request successful")
     return web.json_response(result)
 
+
 async def _shutdown() -> None:
     await asyncio.sleep(0.1)
     raise GracefulExit()
-    
+
+
 async def shutdown(request: web.Request) -> web.Response:
 
     log.info("Shutdown command received")
@@ -159,6 +148,7 @@ async def shutdown(request: web.Request) -> web.Response:
 
     asyncio.ensure_future(_shutdown())
     return web.json_response({"result": "Shutting down"})
+
 
 async def restart(request: web.Request) -> web.Response:
 
@@ -195,12 +185,16 @@ async def start_truenas(app: web.Application) -> None:
     cfg = app["config"]
     assert isinstance(cfg, Config)
     if cfg.log_level not in ("trace", "debug"):
-        log_setup.enable_timestamps_on_normal()
+        # The CLI only has timestamps for debug or trace but the service should
+        # always have timestamps
+        log_setup.enable_timestamps()
 
     log.info("Starting TrueNAS API websocket client")
     client = TrueNASClient(cfg)  #  The client runs inside the web app
     app["truenas"] = client
-    if not await client.connect():  #  will handle the auth process
+
+    if not await client.connection_loop():  #  will handle the auth process
+        log.critical("Something else has the reconnection lock! Exiting program.")
         asyncio.ensure_future(_shutdown())
         return
 
@@ -266,6 +260,18 @@ async def main(cfg: Config) -> None:
         await runner.cleanup()
 
 
+def error_handler(err_string: str, log_level: str):
+
+    if log_level.lower() == "debug":
+        log.exception(err_string)
+        sys.exit(1)
+    elif log_level.lower() == "trace":
+        log.error(err_string)
+        raise
+    else:
+        log.error(err_string)
+        sys.exit(1)
+
 
 def start():
 
@@ -306,8 +312,10 @@ def start():
     log_level: int = logging.getLogger().level
     level_mapping = logging.getLevelNamesMapping()
     if log_level >= level_mapping["WARNING"]:
-        # The service must always run at info or lower
-        log_setup.set_log_level(level_mapping["INFO"])
+        log.warning(
+            "The service will show you very little information when the logging "
+            "level is set to warning or higher"
+        )
     level_name = logging.getLevelName(log_level)
     log.info("Logging level is currently at %s", level_name)
     log.debug("Config: %s", cfg)
