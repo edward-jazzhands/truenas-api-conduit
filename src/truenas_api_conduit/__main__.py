@@ -4,12 +4,11 @@ import sys
 import logging
 import os
 import json
-from typing import Any, Callable, assert_never
+from typing import Any, Callable
 
 # third-party
 import rich_click as click
 from click_didyoumean import DYMMixin
-from rich.traceback import install as tb_install
 
 # project
 from truenas_api_conduit import __version__, APP_NAME
@@ -25,9 +24,6 @@ from truenas_api_conduit.cli_helpers import (
     prompt_for_config,
 )
 from truenas_api_conduit.request_helper import get_request_helper
-
-# rich tracebacks
-tb_install(console=console_stderr, show_locals=False)
 
 log = logging.getLogger(__name__)
 
@@ -805,6 +801,7 @@ def set_key(
                 )
         else:
             log.info("Setting API key in '%s'", current_backend.name)
+            log.warning("This will overwrite any existing key you have set")
             action_desc = "set API key"
             api_key = click.prompt("Enter your TrueNAS API key", hide_input=True)
             keyring.set_password(service, username, api_key)
@@ -821,43 +818,42 @@ def set_key(
         # to use my fallback FileEncrypter backend, and the user password was
         # not found.
         err_string: str | None = None
-        if e.err_code == GetErrorEnum.NOT_A_TTY:
-            console_stderr.print(
-                "TRUENAS_CRYPT_KEY environment variable not set and stdin is not "
-                "a TTY. There's no way to use the FileEncrypter keyring backend."
-            )
-            pass
-        elif e.err_code == GetErrorEnum.VAULT_FILE_NOT_FOUND:
-            err_string = f"Key is not set for: [{COLORS.envvar}]{service}.{username}"
-            pass
-        elif e.err_code == GetErrorEnum.INCORRECT_ENCRYPTION_KEY:
+        if e.err_code == GetErrorEnum.INCORRECT_ENCRYPTION_KEY:
             err_string = "The encryption key you have entered is incorrect."
-        elif e.err_code == GetErrorEnum.GENERIC_ERROR:
-            # This would indicate a bug in the program
-            raise
-        else:
-            assert_never(e.err_code)
-
-        if err_string is not None:
             console_stderr.print(make_usage_error_panel(err_string, "Keyring Error"))
-        if ctx.obj.verbose >= 3:
-            raise
+            sys.exit(1)
+        else:
+            if ctx.obj.verbose >= 3:
+                raise
+            else:
+                log.error(
+                    "Unexpected error: %s | Raise the verbosity to see more information"
+                )
+                sys.exit(1)
     except (
         kr_errs.KeyringError,
         kr_errs.PasswordSetError,
         kr_errs.PasswordDeleteError,
     ) as e:
-        err_string = str(e)
-        console_stderr.print(make_usage_error_panel(err_string, "Keyring Error"))
+        log.error("Keyring error: %s", e)
         if ctx.obj.verbose >= 3:
             raise
+        else:
+            err_string = str(e)
+            console_stderr.print(make_usage_error_panel(err_string, "Keyring Error"))
+            sys.exit(1)
     except FileNotFoundError as e:
         err_string = str(e)
         console_stderr.print(make_usage_error_panel(err_string, "File Error"))
+        sys.exit(1)
     except Exception as e:
-        log.error("Failed keyring action: %s (%s) | %s", action_desc, e.__class__.__name__, e)
+        log.error(
+            "Failed keyring action: %s (%s) | %s", action_desc, e.__class__.__name__, e
+        )
         if ctx.obj.verbose >= 3:
             raise
+        else:
+            sys.exit(1)
     else:
         if actions:
             success_string = ""
@@ -866,7 +862,6 @@ def set_key(
                 if i < len(actions) - 1:
                     success_string += "\n"
             ctx.console.print(make_success_panel(success_string))
-
 
 
 config_help = f"""Attempts to open the config file in your editor, if

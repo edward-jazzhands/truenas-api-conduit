@@ -7,12 +7,20 @@ from pathlib import Path
 import logging
 import sys
 import time
+import socket
+import subprocess
+from dataclasses import dataclass
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 
 # third party
 import websockets.client as client
+# from websockets.client import WebSocketClientProtocol
 import websockets.exceptions as ws_exceptions
 
 # project
+from truenas_api_conduit import APP_NAME
+from truenas_api_conduit.core import PLATFORM, Platform
 from truenas_api_conduit.config import Config
 
 RECONNECT_DELAY: int = 10
@@ -25,6 +33,104 @@ __all__ = [
     "TrueNASClient",
 ]
 
+
+
+def simple_socket_check(address: str, port: int) -> bool:
+    """Use address='8.8.8.8' and port=53 for a basic internet check."""
+    log.debug("Starting simple_socket_check")
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(1)
+    try:
+        sock.connect((address, port))
+        return True
+    except Exception:
+        return False
+    finally:
+        sock.close()
+
+
+def use_ping_tool(address: str) -> bool:
+    log.debug("Starting use_ping_tool")
+
+    if PLATFORM == Platform.WINDOWS:
+        args = ["ping", "-n", "1", "-w", "1000", address]
+    else:
+        args = ["ping", "-c", "1", "-W", "1", address]
+    
+    try:
+        result = subprocess.run(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def curl_test(address: str, api_route: str, timeout: int = 3) -> bool | None:
+    log.debug("Starting curl_test")
+
+    url = f"https://{address}{api_route}"
+
+    try:
+        result: subprocess.CompletedProcess[str] = subprocess.run(
+            ["curl", url],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except FileNotFoundError:
+        log.debug("curl is not installed or not found on PATH.")
+        return None
+    except subprocess.CalledProcessError as e:
+        log.debug(f"curl failed (exit {e.returncode}): {e.stderr.strip()}")
+        return False
+    except subprocess.TimeoutExpired:
+        log.debug(f"curl timed out after {timeout} seconds")
+        return False
+
+    if result.stdout.find("WebSocket"):
+        return True
+    else:
+        return False
+
+@dataclass
+class ConnDiag:
+    has_internet: bool
+    socket_check: bool
+    ping_check: bool
+    curl_check: bool | None
+
+
+async def run_connection_diagnostic(config: Config) -> ConnDiag:
+
+    if config.truenas_host.find(":"):
+        host, port = config.truenas_host.split(":")
+    else:
+        # NOTE: The address for the TrueNAS websocket API is always the
+        # same as the web UI's HTTPS address, with /api/current at the end.
+        host = config.truenas_host
+        port = 443
+
+    diag_tests = {
+        "has_internet": partial(simple_socket_check, "8.8.8.8", 53),
+        "socket_check": partial(simple_socket_check, host, int(port)),
+        "ping_check": partial(use_ping_tool, host),
+        "curl_check": partial(curl_test, config.truenas_host, config.api_route)
+    }
+
+    executor = ThreadPoolExecutor(max_workers=8)
+    futures = {
+        executor.submit(func): test_name
+        for test_name, func in diag_tests.items()
+    }
+
+    # as_completed(futures) is a generator that yields each future as it
+    # finishes regardless of the order they were submitted.
+    diag_results = {}
+    for future in as_completed(futures):
+        test_name = futures[future]
+        log.debug("%s finished", test_name)
+        diag_results[test_name] = future.result()
+    return ConnDiag(**diag_results)
 
 async def _get_websocket_conn(cfg: Config) -> client.WebSocketClientProtocol:
 
@@ -47,8 +153,12 @@ async def _get_websocket_conn(cfg: Config) -> client.WebSocketClientProtocol:
         ssl_context.verify_mode = ssl.CERT_NONE
         log.info("Disabled certificate validation")
 
-    return await client.connect(cfg.uri, ssl=ssl_context)
+    diag = await run_connection_diagnostic(cfg)
+    log.debug(diag)
 
+    return await client.connect(
+        cfg.uri, ssl=ssl_context, user_agent_header=APP_NAME, open_timeout=2
+    )
 
 class TrueNASClient:
     """wrapper around the websocket connection. This is created by the aiohttp web
@@ -67,6 +177,18 @@ class TrueNASClient:
 
         self.req_id = 1
         self.authenticated: bool = False
+
+    def error_handler(self, err_string: str):
+
+        if self.config.log_level == "debug":
+            log.exception(err_string)
+            sys.exit(1)
+        elif self.config.log_level == "trace":
+            log.error(err_string)
+            raise
+        else:
+            log.error(err_string)
+            sys.exit(1)
 
     async def status(self) -> dict[str, Any]:
 
@@ -108,38 +230,68 @@ class TrueNASClient:
         self.req_id += 1
         return d
 
-    async def connect(self) -> None:
-
-        import socket
+    async def connect(self) -> bool:
 
         try:
             await self._connect()
         except ssl.SSLError as e:
             # SSL errors mean the HTTPS connection is not working, often due to
             # a bad certificate.
-            log.error(
+            err_str = (
                 f"SSL error: {e}\n"
                 "You can fix this by:\n"
                 "  - Using a trusted certificate signed by a CA\n"
                 "  - Setting truenas_cert_path to the path of your self-signed certificate\n"
                 "  - Setting validate_certs to False\n"
             )
-            if self.config.log_level == "trace":
-                raise
-            sys.exit(1)
+            self.error_handler(err_str)
         except (ws_exceptions.InvalidURI, socket.gaierror) as e:
-            log.error(
+            err_str = (
                 f"Address resolution error: {e} {e.__class__} | Most likely cause is the "
                 f"address for TRUENAS_HOST is not correct "
             )
-            if self.config.log_level == "trace":
-                raise
-            sys.exit(1)
+            self.error_handler(err_str)
+        except TimeoutError:
+            conn_diag = await run_connection_diagnostic(self.config)
+            err_string = (
+                "Connection diagnostics:\n"
+                f"  Outbound internet working:  {conn_diag.has_internet}\n"
+                f"  TrueNAS port test:  {conn_diag.socket_check}\n"
+                f"  TrueNAS ping test:  {conn_diag.ping_check}\n"
+                f"  TrueNAS curl test:  {conn_diag.curl_check}\n"
+            )
+            if not conn_diag.socket_check:
+                err_string += (
+                    "\nCould not reach your TrueNAS server. The server might "
+                    "be down or you may have entered the incorrect address"
+                )
+            if conn_diag.socket_check and conn_diag.curl_check is False:
+                err_string += (
+                    "\nYour TrueNAS server seems to be reachable, but the API "
+                    "endpoint is not. This suggests some kind of firewall or "
+                    "security issue"
+                )                
+            log.critical(err_string)
         except OSError as e:
-            log.error("OS Connection error: %s %s", e, e.__class__)
-            if self.config.log_level == "trace":
-                raise
-            sys.exit(1)
+            err_string = f"{getattr(e, '__module__', 'none')}.{repr(e)}"
+            err_string += str(e) if str(e) else ""
+            if e.strerror:
+                err_string += f": {e.strerror}"
+            if e.errno:
+                err_string += f"  (Code: {e.errno})"
+            if e.__context__:
+                full_context = f"{getattr(e.__context__, '__module__', 'none')}.{repr(e.__context__)}"
+                err_string += f"\n  Occurred while handling: {full_context}"
+            if e.__cause__:
+                full_cause = (
+                    f"{getattr(e.__cause__, '__module__', 'none')}.{repr(e.__cause__)}"
+                )
+                err_string += f"\n  Caused by: {full_cause}"
+
+            self.error_handler(err_string)
+        else:
+            return True
+        return False
 
     async def _connect(self) -> None:
 
@@ -268,8 +420,7 @@ class TrueNASClient:
         except ws_exceptions.WebSocketException as e:
             log.error("Websocket error: %s %s\n", e, e.__class__)
         except Exception as e:
-            log.error("Unknown reader loop error: %s", e)
-            raise
+            self.error_handler(f"Unknown reader loop error: {e}")
         finally:
             # Any futures still waiting will never get a response, fail them
             for future in self.pending.values():

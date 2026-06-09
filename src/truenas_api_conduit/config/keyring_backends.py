@@ -74,7 +74,9 @@ class FileEncrypter(KeyringBackend):
             "there is no other keyring backend available. You will be prompted "
             "to enter an encryption key to store and retrieve your API key.\n"
             f"You can also set the [{COLORS.envvar}]TRUENAS_CRYPT_KEY[default] environment "
-            f"variable or create a [{COLORS.envvar}].crypt[default] file to avoid this prompt."
+            f"variable or create a [{COLORS.envvar}].crypt[default] file to avoid this "
+            f"prompt. The [{COLORS.command}]set-key[default] command in the CLI will "
+            "offer to create a .crypt file for you"
         )
         super().__init__()
 
@@ -98,7 +100,7 @@ class FileEncrypter(KeyringBackend):
         # expected behavior of a keyring backend is to silently overwrite any
         # existing passwords.
         vault_file: Path = self._get_vault_file(service, username)
-        
+
         # The salt is generated once for every new secret added to the keyring.
         # It does not need to be secret, its only job is to be unique so that the same
         # password produces a different derived key on each machine.
@@ -197,7 +199,6 @@ class FileEncrypter(KeyringBackend):
             return self.crypt_key.get_secret_value()
         else:
             raise NotATTYError("No env var set and stdin is not a TTY")
-
 
     @staticmethod
     def _get_vault_file(service: str, username: str) -> Path:

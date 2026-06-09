@@ -46,7 +46,7 @@ class CLIOptions:
     pretty: bool | None = None
 
 
-def make_usage_error_panel(err_string: str, title: str = "Usage Error") -> Panel:
+def make_usage_error_panel(err_string: str, title: str = "Error") -> Panel:
     err_string = "[default]" + err_string
     return Panel(err_string, title=title, title_align="left", style="bright_red")
 
@@ -54,6 +54,7 @@ def make_usage_error_panel(err_string: str, title: str = "Usage Error") -> Panel
 def make_success_panel(msg: str, title: str = "Success") -> Panel:
     msg = "[default]" + msg
     return Panel(msg, title=title, title_align="left", style="bright_green")
+
 
 def logging_setup(ctx: click.RichContext) -> None:
 
@@ -106,6 +107,10 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
     # Pydantic will not be loaded until this following import. Its one
     # of the heavier dependencies so this improves startup time marginally.
     from truenas_api_conduit.config import Config
+    from truenas_api_conduit.config.keyring_backends import (
+        PasswordGetError,
+        GetErrorEnum,
+    )
     from pydantic import ValidationError
     import tomllib
 
@@ -150,6 +155,23 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
     except tomllib.TOMLDecodeError as e:
         _toml_decoding_error_panel(e)
         sys.exit(1)
+    except PasswordGetError as e:
+        # This is my custom error class so it will only happen if keyring tried
+        # to use my fallback FileEncrypter backend, and the user password was
+        # incorrect. Or a bug happened.
+        err_string: str | None = None
+        if e.err_code == GetErrorEnum.INCORRECT_ENCRYPTION_KEY:
+            err_string = "The encryption key you have entered is incorrect."
+            console_stderr.print(make_usage_error_panel(err_string, "Keyring Error"))
+            sys.exit(1)
+        else:
+            if cli_options.verbose >= 3:
+                raise
+            else:
+                log.error(
+                    "Unexpected error: %s | Raise the verbosity to see more information"
+                )
+                sys.exit(1)
     except Exception as e:
         if log_level <= log_mapping["TRACE"]:
             raise

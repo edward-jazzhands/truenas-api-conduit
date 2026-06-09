@@ -6,7 +6,7 @@ import logging
 import signal
 import asyncio
 from enum import Enum
-from typing import TYPE_CHECKING, assert_never
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     # ws_client contains the import for the websockets library so we gain
@@ -43,7 +43,7 @@ if sys.platform != "win32":
 
 
 log_setup.init_logging()
-log_setup.set_log_level(logging.DEBUG)
+# log_setup.set_log_level(logging.DEBUG)
 log = logging.getLogger(__name__)
 
 
@@ -52,6 +52,19 @@ class RequestHeader(Enum):
     MISSING = 1
     INCORRECT = 2
     CORRECT = 3
+
+
+def error_handler(err_string: str, log_level: str):
+
+    if log_level.lower() == "debug":
+        log.exception(err_string)
+        sys.exit(1)
+    elif log_level.lower() == "trace":
+        log.error(err_string)
+        raise
+    else:
+        log.error(err_string)
+        sys.exit(1)
 
 
 def check_request_header(request: web.Request) -> RequestHeader:
@@ -128,7 +141,10 @@ async def status(request: web.Request) -> web.Response:
     log.info("Status request successful")
     return web.json_response(result)
 
-
+async def _shutdown() -> None:
+    await asyncio.sleep(0.1)
+    raise GracefulExit()
+    
 async def shutdown(request: web.Request) -> web.Response:
 
     log.info("Shutdown command received")
@@ -141,13 +157,8 @@ async def shutdown(request: web.Request) -> web.Response:
         log.warning("Request had the wrong header")
         return web.json_response({"error": "Incorrect header"}, status=400)
 
-    async def _shutdown() -> None:
-        await asyncio.sleep(0.2)
-        raise GracefulExit()
-
     asyncio.ensure_future(_shutdown())
     return web.json_response({"result": "Shutting down"})
-
 
 async def restart(request: web.Request) -> web.Response:
 
@@ -189,7 +200,9 @@ async def start_truenas(app: web.Application) -> None:
     log.info("Starting TrueNAS API websocket client")
     client = TrueNASClient(cfg)  #  The client runs inside the web app
     app["truenas"] = client
-    await client.connect()  #  will handle the auth process
+    if not await client.connect():  #  will handle the auth process
+        asyncio.ensure_future(_shutdown())
+        return
 
     if os.path.exists(LOCK_FILE):
         log.warning("Lockfile was not properly cleaned up after last run")
@@ -208,6 +221,7 @@ async def start_truenas(app: web.Application) -> None:
     # just for this purpose. So windows users just get slightly shittier security.
     # Thats the way she goes bubs.
     LOCK_FILE.chmod(0o600)  # HACK: This won't do anything on windows.
+
 
 async def stop_truenas(app: web.Application) -> None:
 
@@ -252,6 +266,7 @@ async def main(cfg: Config) -> None:
         await runner.cleanup()
 
 
+
 def start():
 
     # NOTE: on the CLI side I allow the model to not be frozen. The CLI
@@ -277,7 +292,6 @@ def start():
             raw = sys.stdin.read()
         if raw:
             log.info("Detected input on stdin, loading from stdin")
-            log.debug("Raw config: %s", raw)  #! FIXME: DELETE THIS
             cfg = Config.model_validate_json(raw)
         else:
             log.info("No input on stdin, loading normally")
@@ -294,11 +308,33 @@ def start():
     if log_level >= level_mapping["WARNING"]:
         # The service must always run at info or lower
         log_setup.set_log_level(level_mapping["INFO"])
-    log.info("Logging level is currently at %s", log_level)
+    level_name = logging.getLevelName(log_level)
+    log.info("Logging level is currently at %s", level_name)
     log.debug("Config: %s", cfg)
     log.debug("Config provenance: %s", cfg.provenance)
 
-    asyncio.run(main(cfg))
+    try:
+        asyncio.run(main(cfg), debug=(level_name.lower() == "trace"))
+    except OSError as e:
+        err_string = f"{getattr(e, '__module__', 'none')}.{repr(e)} "
+        err_string += str(e) if str(e) else ""
+        if e.strerror:
+            err_string += f": {e.strerror}"
+        if e.errno:
+            err_string += f"  (Code: {e.errno})"
+        if e.__context__:
+            full_context = (
+                f"{getattr(e.__context__, '__module__', 'none')}.{repr(e.__context__)}"
+            )
+            err_string += f"\n  Occurred while handling: {full_context}"
+        if e.__cause__:
+            full_cause = (
+                f"{getattr(e.__cause__, '__module__', 'none')}.{repr(e.__cause__)}"
+            )
+            err_string += f"\n  Caused by: {full_cause}"
+        error_handler(err_string, level_name)
+    except Exception as e:
+        error_handler(str(e), logging.getLevelName(log_level))
 
 
 if __name__ == "__main__":
