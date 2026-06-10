@@ -3,20 +3,16 @@ import json
 import os
 import sys
 import logging
-import signal
 import asyncio
-from enum import Enum
+import signal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    # ws_client contains the import for the websockets library so we gain
-    # a little bit by making it a lazy import when its needed.
-    from truenas_api_conduit.core.ws_client import TrueNASClient
-
     # This module will look at the is_config_frozen global to determine if
     # the config is frozen. As such we need to defer importing it until
     # we've had a chance to set that global.
     from truenas_api_conduit.config import Config
+    from truenas_api_conduit.core.ws_client import TrueNASClient
 
 # third party
 import pydantic
@@ -24,179 +20,37 @@ from aiohttp import web
 from aiohttp.web_runner import GracefulExit
 
 # project
-from truenas_api_conduit import LOCK_FILE, APP_NAME
+from truenas_api_conduit import LOCK_FILE
 from truenas_api_conduit.console import console_stderr
 import truenas_api_conduit.log_setup as log_setup
+import truenas_api_conduit.core.endpoints as endpoints
 
+#! NOT ASYNC
+# def handle_exit(*_):
+#     print("\nShutting down.")
+#     sys.exit(0)
 
-def handle_exit(*_):
-    print("\nShutting down.")
-    sys.exit(0)
+# signal.signal(signal.SIGINT, handle_exit)
+# signal.signal(signal.SIGTERM, handle_exit)
 
-
-signal.signal(signal.SIGINT, handle_exit)
-signal.signal(signal.SIGTERM, handle_exit)
-
-if sys.platform != "win32":
-    signal.signal(signal.SIGHUP, handle_exit)
-    signal.signal(signal.SIGQUIT, handle_exit)
+# if sys.platform != "win32":
+#     signal.signal(signal.SIGHUP, handle_exit)
+#     signal.signal(signal.SIGQUIT, handle_exit)
 
 
 log_setup.init_logging()
-# log_setup.set_log_level(logging.DEBUG)
 log = logging.getLogger(__name__)
 
 
-class RequestHeader(Enum):
-    NONE = 0
-    MISSING = 1
-    INCORRECT = 2
-    CORRECT = 3
+# def handle_async_exit(client: TrueNASClient):
+#     log.info("Received OS shutdown signal.")
+#     await client.close()
+#     log.info("Websocket client shutdown successfully")
+#     # NOTE: once the client has shut itself down gracefully, the aiohttp
+#     # server should run the teardown in truenas_context_manager 
 
 
-def check_request_header(request: web.Request) -> RequestHeader:
-    "Check if the request has the required header"
-
-    looking_for: str | None = request.app["config"].request_header
-
-    if looking_for is None:  # this means there is no required header
-        return RequestHeader.NONE
-    else:
-        if incoming_header := request.headers.get(APP_NAME):
-            log.info("Found incoming header: %s", incoming_header)
-            if incoming_header == looking_for:
-                return RequestHeader.CORRECT
-            else:
-                return RequestHeader.INCORRECT
-        else:
-            return RequestHeader.MISSING
-
-
-# in Aiohttp, the callback endpoint functions must always take a web.Request
-# object as the only argument.
-
-
-async def request_handler(request: web.Request) -> web.Response:
-    "Take request in json-rpc, return response in json-rpc"
-
-    # This is the callback for the /request endpoint
-    # The API for the client is simple. The client class can be
-    # called as an awaitable function.
-
-    log.info("Request received")
-
-    header = check_request_header(request)
-    if header == RequestHeader.MISSING:
-        log.warning("Request did not have the required header")
-        return web.json_response({"error": "Missing header"}, status=400)
-    elif header == RequestHeader.INCORRECT:
-        log.warning("Request had the wrong header")
-        return web.json_response({"error": "Incorrect header"}, status=400)
-
-    try:
-        payload = await request.json()  # JSON-RPC payload
-    except json.JSONDecodeError as e:
-        log.error("Malformed request, skipping: %s", e)
-        return web.json_response({"error": "Malformed request"}, status=400)
-
-    log.info("Request payload: %s", payload)
-
-    client: TrueNASClient = request.app["truenas"]
-    result = await client(payload)
-    log.info("Request successful")
-    log.debug("Response: %s,", result)
-
-    # Return result back to CLI as JSON
-    return web.json_response(result)
-
-
-async def status(request: web.Request) -> web.Response:
-    "Check the status of the TrueNAS API Conduit service"
-
-    log.info("Status request received")
-
-    header = check_request_header(request)
-    if header == RequestHeader.MISSING:
-        log.warning("Request did not have the required header")
-        return web.json_response({"error": "Missing header"}, status=400)
-    elif header == RequestHeader.INCORRECT:
-        log.warning("Request had the wrong header")
-        return web.json_response({"error": "Incorrect header"}, status=400)
-
-    client: TrueNASClient = request.app["truenas"]
-    result = await client.status()
-    log.info("Status request successful")
-    return web.json_response(result)
-
-
-async def _shutdown() -> None:
-    await asyncio.sleep(0.1)
-    raise GracefulExit()
-
-
-async def shutdown(request: web.Request) -> web.Response:
-
-    log.info("Shutdown command received")
-
-    header = check_request_header(request)
-    if header == RequestHeader.MISSING:
-        log.warning("Request did not have the required header")
-        return web.json_response({"error": "Missing header"}, status=400)
-    elif header == RequestHeader.INCORRECT:
-        log.warning("Request had the wrong header")
-        return web.json_response({"error": "Incorrect header"}, status=400)
-
-    asyncio.ensure_future(_shutdown())
-    return web.json_response({"result": "Shutting down"})
-
-
-async def restart(request: web.Request) -> web.Response:
-
-    log.info("Restart command received")
-
-    header = check_request_header(request)
-    if header == RequestHeader.MISSING:
-        log.warning("Request did not have the required header")
-        return web.json_response({"error": "Missing header"}, status=400)
-    elif header == RequestHeader.INCORRECT:
-        log.warning("Request had the wrong header")
-        return web.json_response({"error": "Incorrect header"}, status=400)
-
-    async def _restart() -> None:
-        await asyncio.sleep(0.2)
-        await request.app.cleanup()
-        os.environ["TAC_CONFIG"] = request.app["config"].model_dump_json()
-        dname = APP_NAME + "d"  # ex: my-appd
-        os.execvp(dname, [dname])
-
-    asyncio.ensure_future(_restart())
-    return web.json_response({"result": "Restarting"})
-
-
-# in Aiohttp, the startup and cleanup hooks will always have the app instance
-# passed in to them as the first argument.
-
-
-async def start_truenas(app: web.Application) -> None:
-
-    from truenas_api_conduit.core.ws_client import TrueNASClient
-    from truenas_api_conduit.config import Config
-
-    cfg = app["config"]
-    assert isinstance(cfg, Config)
-    if cfg.log_level not in ("trace", "debug"):
-        # The CLI only has timestamps for debug or trace but the service should
-        # always have timestamps
-        log_setup.enable_timestamps()
-
-    log.info("Starting TrueNAS API websocket client")
-    client = TrueNASClient(cfg)  #  The client runs inside the web app
-    app["truenas"] = client
-
-    if not await client.connection_loop():  #  will handle the auth process
-        log.critical("Something else has the reconnection lock! Exiting program.")
-        asyncio.ensure_future(_shutdown())
-        return
+def create_lockfile(cfg: Config):
 
     if os.path.exists(LOCK_FILE):
         log.warning("Lockfile was not properly cleaned up after last run")
@@ -217,15 +71,67 @@ async def start_truenas(app: web.Application) -> None:
     LOCK_FILE.chmod(0o600)  # HACK: This won't do anything on windows.
 
 
-async def stop_truenas(app: web.Application) -> None:
+async def truenas_context_manager(app: web.Application):
 
-    log.info("Running cleanup")
-    client: TrueNASClient = app["truenas"]
-    await client.close()
+    # NOTE: This uses the "context manager generator" pattern. It must have
+    # exactly one yield, dividing the function in half. The first half
+    # is the setup and the second half is the teardown. This convention
+    # is set by aiohttp and is required to use app.cleanup_ctx list
+
+    from truenas_api_conduit.core.ws_client import TrueNASClient
+    from truenas_api_conduit.config import Config  # imports pydantic
+
+    cfg = app["config"]
+    assert isinstance(cfg, Config)
+    if cfg.log_level not in ("trace", "debug"):
+        # The CLI only has timestamps for debug or trace but the service should
+        # always have timestamps
+        log_setup.enable_timestamps()
+
+    log.info("Starting TrueNAS API websocket client")
+    loop = asyncio.get_running_loop()
+    client = TrueNASClient(cfg, loop)
+    app["truenas_client"] = client
+    create_lockfile(cfg)
+
+    # try:
+    #     loop.add_signal_handler(signal.SIGINT, handle_async_exit, client)
+    #     loop.add_signal_handler(signal.SIGTERM, handle_async_exit, client)
+    # except NotImplementedError:
+    #     # this will happen on windows
+    #     pass
+    #     #! Do we want to register these?
+    #     # loop.add_signal_handler(signal.SIGHUP, handle_async_exit)
+    #     # loop.add_signal_handler(signal.SIGQUIT, handle_async_exit)
+
+    # NOTE: This method creates and manages its own background task with
+    # asyncio.create_task.
+    app["truenas_task"] = client.start()
+
+    # The 'wrap yield in try/finally' pattern. Its kind of a brainfuck
+    # because we've essentially turned the entirely of the program
+    # outside this function (defined by "yield" here) into a single
+    # command, which we can now catch and chuck a finally behind.
+    # So if any error occurs during the rest of the program before this
+    # function resumes control to cleanup, this will catch it to run our
+    # finally block.
+    # Half of me thinks this is awesome and the other half is like
+    # "what in the ever loving fuck, why is this possible"
+
     try:
-        os.remove(LOCK_FILE)
-    except FileNotFoundError:
-        pass
+        yield
+    except (GracefulExit, asyncio.CancelledError):
+        log.warning("Server shutdown interrupted TrueNAS")
+    finally:
+        # <>-+-<>-+-<>-+-<>-+-<>-+-<>-+-<>-+-<>-+-<>-+-<>
+        # TEARDOWN
+        await client.close()
+
+        log.info("Running aiohttp teardown")
+        try:
+            os.remove(LOCK_FILE)
+        except FileNotFoundError:
+            pass
 
 
 async def main(cfg: Config) -> None:
@@ -233,17 +139,15 @@ async def main(cfg: Config) -> None:
     log.info("Starting to initialize the HTTP server")
 
     app = web.Application()
-
     app["config"] = cfg
 
-    # HTTP endpoints for the CLI
-    app.router.add_post("/request", request_handler)
-    app.router.add_get("/status", status)
-    app.router.add_post("/shutdown", shutdown)
-    app.router.add_post("/restart", restart)
+    app.router.add_post("/request", endpoints.request_handler)
+    app.router.add_get("/status", endpoints.status)
+    app.router.add_post("/shutdown", endpoints.shutdown)
+    app.router.add_post("/restart", endpoints.restart)
 
-    app.on_startup.append(start_truenas)  # sets up websocket client
-    app.on_cleanup.append(stop_truenas)  # closes websocket client
+    # manages the lifecycle
+    app.cleanup_ctx.append(truenas_context_manager)
 
     runner = web.AppRunner(app)
     await runner.setup()
@@ -254,9 +158,11 @@ async def main(cfg: Config) -> None:
 
     try:
         await asyncio.Event().wait()
-    except GracefulExit:
-        pass
+    except (GracefulExit, asyncio.CancelledError):
+        log.info("Received exit command")
+        pass  #  we pass here to let runner.cleanup() run
     finally:
+        # will run the teardown in truenas_context_manager:
         await runner.cleanup()
 
 
@@ -296,6 +202,7 @@ def start():
         if not sys.stdin.isatty():  # piped start, OS startup, etc
             log.info("Detected not a TTY, checking stdin...")
             raw = sys.stdin.read()
+
         if raw:
             log.info("Detected input on stdin, loading from stdin")
             cfg = Config.model_validate_json(raw)
@@ -314,7 +221,8 @@ def start():
     if log_level >= level_mapping["WARNING"]:
         log.warning(
             "The service will show you very little information when the logging "
-            "level is set to warning or higher"
+            "level is set to warning or higher. Set logging to info or use the -v "
+            "flag to see more information."
         )
     level_name = logging.getLevelName(log_level)
     log.info("Logging level is currently at %s", level_name)

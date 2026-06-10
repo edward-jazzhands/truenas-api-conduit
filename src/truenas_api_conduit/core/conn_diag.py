@@ -45,28 +45,34 @@ def use_ping_tool(address: str) -> bool:
         return False
 
 
-def curl_test(address: str, api_route: str, timeout: int = 3) -> bool | None:
+def curl_test(address: str, api_route: str, timeout: int = 2) -> bool | None:
 
     url = f"https://{address}{api_route}"
 
+    log.debug("curl url: %s", url)
+
     try:
         result: subprocess.CompletedProcess[str] = subprocess.run(
-            ["curl", url],
+            ["curl", url, "--connect-timeout", f"{timeout}"],
             capture_output=True,
             text=True,
-            timeout=timeout,
+            timeout=timeout + 1,  # this shouldnt be necessary but just in case
         )
     except FileNotFoundError:
         log.debug("curl is not installed or not found on PATH.")
         return None
     except subprocess.CalledProcessError as e:
         log.debug(f"curl failed (exit {e.returncode}): {e.stderr.strip()}")
-        return False
+        if "SSL certificate problem" in e.stderr:
+            return True
+        else:
+            return False
     except subprocess.TimeoutExpired:
         log.debug(f"curl timed out after {timeout} seconds")
         return False
 
-    if result.stdout.find("WebSocket"):
+    log.debug("curl response:\n %s \n %s", result.stdout, result.stderr)
+    if "WebSocket" in result.stdout or "SSL certificate problem" in result.stderr:
         return True
     else:
         return False
@@ -102,7 +108,7 @@ async def run_connection_diagnostic(
 ) -> AsyncGenerator[tuple[str, bool | None], None]:
     """This is a generator so it can stream the test results back one at a time."""
 
-    if config.truenas_host.find(":"):
+    if ":" in config.truenas_host:
         host, port = config.truenas_host.split(":")
     else:
         # NOTE: The address for the TrueNAS websocket API is always the

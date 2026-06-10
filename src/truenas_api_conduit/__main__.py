@@ -521,7 +521,7 @@ def request(
 
     if params:
         log.debug("Raw params: %s", params)
-        if params.find("“") != -1:
+        if "“" in params:
             console_stderr.print(
                 make_usage_error_panel(
                     """You used the fancy smart quotes symbol (“) instead of the regular """
@@ -807,7 +807,7 @@ def set_key(
             keyring.set_password(service, username, api_key)
             log.debug("Success: key set")
             actions.append(action_desc)
-            if current_backend.name.find("FileEncrypter"):
+            if "FileEncrypter" in current_backend.name:
                 action_desc = "store crypt key in file"
                 if store_crypt_key(api_key):
                     actions.append(action_desc)
