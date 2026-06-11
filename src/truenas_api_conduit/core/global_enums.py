@@ -19,5 +19,5 @@ class Endpoints(StrEnum):
 
     REQUEST = "/request"
     STATUS = "/status"
-    SHUTDOWN = "/shutdown"
+    STOP = "/stop"
     RESTART = "/restart"

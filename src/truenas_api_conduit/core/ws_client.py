@@ -1,13 +1,15 @@
 # standard library
 import asyncio
-from typing import Any, Final
+from typing import Any, Final, Callable, TYPE_CHECKING
 import json
 import ssl
 from pathlib import Path
 import logging
 import time
 import socket
-from contextlib import suppress
+from dataclasses import dataclass
+if TYPE_CHECKING:
+    from truenas_api_conduit.core.msg_receiver import MessageReceiver
 
 # third party
 import websockets.client as client
@@ -15,38 +17,52 @@ import websockets.exceptions as ws_exceptions
 
 # project
 from truenas_api_conduit import APP_NAME
+from truenas_api_conduit.core import examine_os_error
+from truenas_api_conduit.errors import ConduitError
 from truenas_api_conduit.config import Config
 from truenas_api_conduit.core.conn_diag import ConnDiag, run_connection_diagnostic
 
 OPEN_TIMEOUT: Final[int] = 5  #         when creating the websocket client
-REQUEST_WAIT_TIME: Final[int] = 10  #   request comes in but server is reconnecting
-RESPONSE_TIMEOUT: Final[int] = 10  #    how long to wait for response in a call
+REQUEST_WAIT_TIME: Final[int] = 10  #   how long to wait for response in a call
 HEARTBEAT: Final[int] = 30  #           from client to TrueNAS
 PING_TIMEOUT: Final[int] = 10  #        how long to wait if a heartbeat fails
 MAX_RECONNECT_WAIT: Final[int] = 60  #  max wait between reconnections if connection drops
+SHUTDOWN_TIMEOUT: Final[int] = 5  #     how long to wait for the client task to finish
 
 log = logging.getLogger(__name__)
 
 
 __all__ = [
     "TrueNASClient",
+    "CloseResult",
 ]
 
+@dataclass
+class CloseResult:
+    # False, "Tried to close, but there's no client task"
+    # False, "Unexpected error closing the client task"
+    # True, "Client closed successfully"
+    is_closed: bool
+    msg: str
+
+
+class UnexpectedShutdown(ConduitError):
+    pass
 
 class TrueNASClient:
     """wrapper around the websocket connection. This is created by the aiohttp web
     server, and shares aiohttp's event loop (must be passed in)"""
 
-    def __init__(self, config: Config, loop: asyncio.AbstractEventLoop) -> None:
+    def __init__(self, config: Config, loop: asyncio.AbstractEventLoop, message_receiver: MessageReceiver) -> None:
 
-        # NOTE: My own code has no reason to pass in the loop but its an easy thing
-        # to future proof so why tf not
-
-        self.config = config
+        self.config: Config = config
         "pydantic-settings Config object"
 
-        self.loop = loop
+        self.loop: asyncio.AbstractEventLoop = loop
         "the asyncio event loop"
+
+        self.message_receiver: MessageReceiver = message_receiver
+        "Callable class to send messages from this client to the aiohttp server"
 
         self.ws_conn: client.WebSocketClientProtocol | None = None
         "Websocket connection client"
@@ -55,20 +71,33 @@ class TrueNASClient:
         """Maps request IDs -> asyncio Futures waiting for responses.
         This is how HTTP requests get their matching websocket response"""
 
-        self.req_id = 1
+        self.req_id: int = 1
         "increments one with each request"
 
-        self.is_connected = asyncio.Event()
+        self.is_connected: asyncio.Event = asyncio.Event()
         "Signals when the websocket is ready to send data."
 
-        self._reconnect_lock = asyncio.Lock()
+        self._reconnecting: bool = False
         "Ensures only one reconnect loop runs at a time."
 
-        self.client_task: asyncio.Task | None = None
+        self.req_id_lock: asyncio.Lock = asyncio.Lock()
+        "Ensures only one function can grab and increment the request ID at a time"
 
-        self._closing = False
+        self.client_task: asyncio.Task | None = None
+        "The asyncio task that runs the client loop"
+
+        self._closing:bool = False
+        "Flag set by the close() method to indicate that the client is closing"
 
         self.conn_diag: ConnDiag | None = None
+        """The connection diagnostics object. Runs every reconnection attempt
+        as well as again if a TimeoutError is raised"""
+
+    # PUBLIC API SECTION
+    # It's important nothing in the public API can raise errors back to
+    # the caller / module that's implementing this class. We want to keep
+    # a clean separation of concerns and not allow errors to crash the
+    # outer service (aiohttp), but rather just provide helpful messages.
 
     def start(self) -> asyncio.Task:
         "returns the created task"
@@ -77,44 +106,27 @@ class TrueNASClient:
         self.client_task = asyncio.create_task(self._start())
         return self.client_task
 
-    async def _start(self) -> None:
-        "runs for the lifetime of the app."
+    async def close(self) -> CloseResult:
+        """used to gracefully close the client and shut down the program.
+        This should only be called by the aiohttp server, not internally."""
 
-        while not self._closing:
-            try:
-                # this will loop indefinitely until it connects, with an
-                # exponential backoff
-                await self._connection_loop()
+        log.debug("Starting close() method")
 
-                # this will loop indefinitely until the connection drops.
-                # it doesn't block the event loop because the ws_conn
-                # provides an async generator that runs forever and wakes up
-                # when messages come in on the read pipe
-                await self._reader_loop()
+        # NOTE: This will be called in two scenarios I can think of:
+        # 1) If the client lifecycle task finishes for any reason, it will trigger a
+        #    callback which will start the service cleanup 
+        # 2) If the server receives a stop command or a kill signal, it will set
+        #    the shutdown_event and trigger the service cleanup
 
-            # If this cancel is because a shutdown was requested from close(),
-            # then self._closing will be set to True. So when we break the loop,
-            # the function will complete and the task should get marked as finished.
-            # If for some reason this was not caused by the close() command, then
-            # the while loop will restart
-            except asyncio.CancelledError:
-                log.warning("Websocket client received a cancel command")
-                break
-            except Exception as e:
-                log.error(f"Worker caught error: {e}")
-                # This class should swallow all errors unless we're on trace.
-                # The websocket connection errors are irrelevant to the web server
-                # that created this class.
-                if self.config.log_level == "trace":
-                    raise
-            finally:
-                # if we got here then the reader loop was broken
-                self._cleanup_pending()
+        # (service cleanup is the cleanup/teardown section of the context manager
+        # for the TrueNASClient class in the aiohttp server)
 
-    async def close(self) -> None:
+        # In scenario 1, the client lifecycle task will already be finished.
+        # In scenario 2, the client lifecycle task will still be running.
 
         if not self.client_task:
-            raise RuntimeError("Tried to close, but there's no client task")
+            # I believe this should never happen under normal conditions
+            return CloseResult(False, "Tried to close, but there's no client task")
 
         self._closing = True
 
@@ -123,22 +135,41 @@ class TrueNASClient:
         # task, which will be raised by asyncio at the very next thing in
         # the task that tries to await something (its asyncio magic, dont ask
         # too many questions, you just have to believe)
-        self.client_task.cancel()
+        if not self.client_task.cancelling():  # returns 0 (falsy) if not cancelling 
+            self.client_task.cancel()
 
-        # That CancelledError will get caught in the reader loop and cause the
-        # task to shut down. Then we can safely close the websocket connection
-        # without affecting an active reader
+        # Now, we can safely close the websocket connection without affecting
+        # the active reader loop. After shutting down the connection, that
+        # CancelledError we queued up will get caught in the reader loop, which will
+        # stop itself. After the reader loop finishes, the lifecycle method
+        # _start will restart its while loop, and see the _closing flag is set.
         if self.ws_conn:
-            await self.ws_conn.close(reason="Server shutting down")
+            try:
+                await self.ws_conn.close(reason="Server shutting down")
+            except Exception as e:
+                # literally any error that could happen here should not stop
+                # the program. The OS will clean up the connection anyway.
+                log.error("Error closing the websocket connection: %s", e)
 
         # Last we have to await the task to block here until it finishes.
-        # This is necessary to give the CancelledError time to bubble up through
-        # the task and allow the client to gracefully close itself, so that
-        # aiohttp can stay open until the TrueNAS client is completely closed
-        # and then send a nice "shutdown complete" message, instead of just
-        # returning a "send and pray" response.
-        with suppress(asyncio.CancelledError):
-            await self.client_task
+        # This is necessary to give the CancelledError we just triggered the time 
+        # it needs to bubble up through the program and allow the client to gracefully
+        # close itself. This way, aiohttp can stay open until the TrueNAS client is
+        # completely closed and then send a nice message that says "the client has
+        # closed gracefully", instead of just praying it worked.
+        # ALSO: This is safe to run if the task has already finished.
+        try:
+            await asyncio.wait_for(self.client_task, timeout=SHUTDOWN_TIMEOUT)
+        except asyncio.CancelledError:
+            log.debug("Caught a cancelled error while waiting for the client task to close")
+        except Exception as e:
+            # If we encountered an error waiting for the client to clean itself up,
+            # something is borked and the caller needs to force an exit
+            log.error("Unexpected error closing the client task: %s", e)
+            return CloseResult(False, f"Error while closing the internal TrueNAS client: {e}")
+
+        return CloseResult(True, "Client closed successfully")
+
 
     async def status(self) -> dict[str, Any]:
 
@@ -153,11 +184,14 @@ class TrueNASClient:
         # RIGHT NOW. We don't wait. We return what it says right now.
         if connected := self.is_connected.is_set():
             start_time = time.time()
-            await self({"method": "core.ping", "params": []})
-            end_time = time.time()
-            ping = f"{(end_time - start_time)*1000:.0f} ms"
+            response = await self.call({"method": "core.ping", "params": []}) # handles the timeout
+            if response["result"] in ("FAILED", "TIMEOUT"):
+                ping = f"Timed out after {REQUEST_WAIT_TIME} seconds"
+            else:
+                end_time = time.time()
+                ping = f"{(end_time - start_time)*1000:.0f} ms"
         else:
-            ping = "not authenticated"
+            ping = "Not connected"
             log.warning("Request received but client is not connected")
 
         return {
@@ -176,6 +210,78 @@ class TrueNASClient:
             "no_color": self.config.no_color,
         }
 
+    # NOTE: Just to refresh your brain on how this works if you're rusty, in a
+    # proper websocket client architecture, the sending logic and the receiving logic
+    # are separated into two different concerns. The sending logic is the "writer"
+    # and the receiving logic is the "reader". Technically, sending and receiving
+    # are two different streams, websockets just abstract that into one interface.
+    # That's why we need the pending dict. call() just fires off the request
+    # and returns a future.
+
+    async def call(self, payload: dict[str, Any]) -> dict[str, Any]:
+
+        if not self.ws_conn:
+            msg = "Request received but client is not connected"
+            log.warning(msg)
+            return {"result": "NOT CONNECTED", "error": msg}
+
+        # check connection is alive before making request
+        try:
+            # The request wait time adds a buffer in case its in the middle of
+            # trying to reconnect
+            await asyncio.wait_for(self.is_connected.wait(), timeout=REQUEST_WAIT_TIME)
+        except TimeoutError as e:
+            msg = "TrueNAS API request timed out waiting for websocket reconnection."
+            if self.config.log_level == "trace":
+                raise TimeoutError(msg) from e
+            else:
+                log.error(msg)
+                return {"result": "TIMEOUT", "error": msg}
+
+        # I suspect locking the request maker is not actually necessary here,
+        # but the bug finders keep going off if this is not done with a lock.
+        # And there definitely should not be any need for a timeout here.
+        async with self.req_id_lock:
+            rpc_payload = self._make_rpc_request(
+                payload["method"], payload["params"]
+            )
+
+        future: asyncio.Future[dict[str, Any]] = self.loop.create_future()
+        self.pending[rpc_payload["id"]] = future
+
+        try:
+            send_fut = self.ws_conn.send(json.dumps(rpc_payload))
+            await asyncio.wait_for(send_fut, timeout=REQUEST_WAIT_TIME)
+        except Exception as e:
+            # Clean up the pending dict if the send fails instantly, otherwise
+            # the request will be stuck in memory
+            self.pending.pop(rpc_payload["id"], None)
+            msg = "Failed to send the request to the TrueNAS server."
+            if self.config.log_level == "trace":
+                raise ConnectionError(msg) from e
+            else:
+                log.error(msg)
+                return {"result": "FAILED", "error": msg}
+
+        # return await future
+        try:
+            return await asyncio.wait_for(future, timeout=REQUEST_WAIT_TIME)
+        except TimeoutError as e:
+            # Clean up the pending dict so it doesn't leak
+            self.pending.pop(payload["id"], None)
+            msg = "Timed out waiting for a response from the TrueNAS server."
+            if self.config.log_level == "trace":
+                raise TimeoutError(msg) from e
+            else:
+                log.error(msg)
+                return {"result": "TIMEOUT", "error": msg}
+
+
+    # PUBLIC API ABOVE THIS LINE
+    # *-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+
+    # INTERNAL METHODS BELOW 
+
+    # used in _connect and call()
     def _make_rpc_request(
         self,
         method: str,
@@ -191,16 +297,122 @@ class TrueNASClient:
         self.req_id += 1
         return d
 
+    # used in _start
+    def _cleanup_pending(self):
+        """this is run to clear old requests every time the reader loop breaks
+        and the client restarts the full lifecycle (_start)"""
+
+        err = ConnectionError("Websocket connection dropped")
+        for future in self.pending.values():
+            if not future.done():
+                future.set_exception(err)  # Fail any pending futures
+        self.pending.clear()
+        #! Consier: Should we be destroying the ws_conn object here as well?:
+        # it will be recreated by the next connection loop so I believe this
+        # is good to remove it here. It ensures the object is not lingering
+        # between reconnections attempts.
+        self.ws_conn = None
+
+    # used in start()
+    async def _start(self) -> None:
+        "runs for the lifetime of the app."
+
+        while not self._closing:
+            try:
+                # this will loop indefinitely until it connects, with an
+                # exponential backoff
+                await self._connection_loop()
+
+                # this will loop indefinitely until the connection drops.
+                # it doesn't block the event loop because the ws_conn
+                # provides an async generator that runs forever and wakes up
+                # when messages come in on the read pipe
+                await self._reader_loop()
+
+            # If this cancel is because a shutdown was requested from close(),
+            # then self._closing will be set to True. So when we break the loop,
+            # the function will complete and the task should get marked as finished.
+            # If for some reason this was not caused by the close() command (which
+            # triggers the CancelledError), or by an unrecoverable error (triggers
+            # UnexpectedShutdown), then the while loop will restart
+            except asyncio.CancelledError:
+                log.warning("Websocket client received a cancel command")
+                break
+            except UnexpectedShutdown as e:
+                log.error(f"Program has to close due to an unrecoverable error: {e}")
+                break
+            except Exception as e:
+                log.error(f"Worker caught error: {e}")
+                # This class should swallow all errors unless we're on trace.
+                # The websocket connection errors are irrelevant to the web server
+                # that created this class.
+                if self.config.log_level == "trace":
+                    raise
+            finally:
+                # if we got here then the reader loop was broken
+                self._cleanup_pending()
+
+        log.info("Exiting the TrueNAS client task")
+        # When this task completes it will trigger the callback set with
+        # loop.add_done_callback() in the aiohttp web server, which will
+        # trigger the server to shutdown.
+
+    # Used in _start
+    async def _connection_loop(self) -> bool:
+        """False means something else has the reconnect flag set. True
+        means it worked. Otherwise loops forver."""
+
+        if self._reconnecting:  # only one at a time
+            return False
+
+        log.info("Initiating websocket connection sequence...")
+
+        # NOTE: This will just keep retrying forever. That's intentional,
+        # since this is a background service that is expected behavior and
+        # good user UX.
+
+        delay = 2
+        while not self.is_connected.is_set():
+            try:
+                await self._connect()
+            # UNRECOVERABLES:
+            except (
+                asyncio.CancelledError, #  Injected when the asyncio task is cancelled
+                UnexpectedShutdown,  #   Our custom exception, signals unrecoverable error
+                json.JSONDecodeError,  #   ! is this one recoverable?
+                ValueError,  #   TODO: should be used to indicate wrong API key?
+                ssl.SSLError,  #   NOTE: The only reason we'd catch one of the rest here
+                ws_exceptions.InvalidURI,  # is if we're in trace mode
+                socket.gaierror,   #   trace just raises all exceptions
+            ):
+                raise
+            # RECOVERABLES (everything else):
+            except Exception:
+                # Anything not one of the above should be recoverable, and we
+                # will retry in a loop.
+                log.error("Reconnect attempt failed. Retrying in %ss...", delay)
+                await asyncio.sleep(delay)
+                # Exponential backoff
+                delay = min(delay * 2, MAX_RECONNECT_WAIT)
+
+        log.debug("Broke out the connection loop so we must be connected now")
+        assert self.is_connected.is_set()
+        return True
+
+    # Used in _connect and in _get_websocket_conn
     async def _perform_conn_diag(self) -> ConnDiag:
 
         results = {}
         # NOTE: These tests handle their own timeouts and return False if a timeout
-        # is encountered, there should be no reason this can raise an error
+        # is encountered, there should be no reason this can raise an error. They
+        # also run in their own threads with loop.run_in_executor, so they run
+        # concurrently and this is basically instant if the connection is good.
         async for test_name, result in run_connection_diagnostic(self.config):
             results[test_name] = result
             log.info("%s result: %s", test_name, result)
         return ConnDiag(**results)
 
+    # Used in _connect
     async def _get_websocket_conn(self) -> client.WebSocketClientProtocol:
 
         log.info("Starting _get_websocket_conn")
@@ -232,36 +444,45 @@ class TrueNASClient:
             ping_timeout=PING_TIMEOUT,
         )
 
+    # Used in _connect
     async def _error_handler(self, err_string: str, e: Exception):
 
+        # Setting _closing will cause the lifecycle task to exit the loop,
+        # the task will then finish, triggering the callback to run the
+        # close() method, do the cleanup, and then shutdown the program.
+        self._closing = True
         if self.config.log_level == "trace":
             log.error(err_string)
-            raise
+            raise  # trace just lets it bubble up directly
         elif self.config.log_level == "debug":
             log.error(err_string, exc_info=e)
-            await self.close()
+            raise UnexpectedShutdown(err_string) from e
         else:
             log.error(err_string)
-            await self.close()
+            raise UnexpectedShutdown(err_string) from e
 
+    # Used in _connection_loop
     async def _connect(self) -> None:
+        "creates a new self.ws_conn object every time this runs"
 
         try:
             self.ws_conn = await self._get_websocket_conn()
 
-            req = self._make_rpc_request(
-                "auth.login_with_api_key", [self.config.api_key.get_secret_value()]
-            )
+            async with self.req_id_lock:
+                req = self._make_rpc_request(
+                    "auth.login_with_api_key", [self.config.api_key.get_secret_value()]
+                )
             await self.ws_conn.send(json.dumps(req))
 
             # We have to read from recv manually to ensure we're authenticated
             # before starting the reader loop.
+            # ! FIXME: I'm pretty sure this needs to have its own error handling.
             raw = await self.ws_conn.recv()
             auth_response = json.loads(raw)
 
             # HACK: This is a very crude way to validate that we authenticated
             # properly. We need to determine a better system
-            # TODO: This needs to have a check for why the auth failed (ie.
+            # ! FIXME: This needs to have a check for why the auth failed (ie.
             # incorrect password)
             if not auth_response.get("result"):
                 raise ValueError("Response did not contain key named 'result'")
@@ -302,20 +523,7 @@ class TrueNASClient:
             )
             await self._error_handler(err_str, e)
         except OSError as e:
-            err_string = f"{getattr(e, '__module__', 'none')}.{repr(e)}"
-            err_string += str(e) if str(e) else ""
-            if e.strerror:
-                err_string += f": {e.strerror}"
-            if e.errno:
-                err_string += f"  (Code: {e.errno})"
-            if e.__context__:
-                full_context = f"{getattr(e.__context__, '__module__', 'none')}.{repr(e.__context__)}"
-                err_string += f"\n  Occurred while handling: {full_context}"
-            if e.__cause__:
-                full_cause = (
-                    f"{getattr(e.__cause__, '__module__', 'none')}.{repr(e.__cause__)}"
-                )
-                err_string += f"\n  Caused by: {full_cause}"
+            err_string = examine_os_error(e)
             log.error(err_string)
             raise
         except json.JSONDecodeError as e:
@@ -336,117 +544,7 @@ class TrueNASClient:
             log.debug(self.conn_diag)
             return
 
-    def _cleanup_pending(self):
-        "this is run every time the client reconnects to clear old requests"
-
-        err = ConnectionError("Websocket connection dropped")
-        for future in self.pending.values():
-            if not future.done():
-                future.set_exception(err)  # Fail any pending futures
-        self.pending.clear()
-
-    async def _connection_loop(self) -> bool:
-        """False means something else has the reconnect lock. True
-        means it worked. Otherwise loops forver."""
-
-        if self._reconnect_lock.locked():  # only one at a time
-            return False
-
-        async with self._reconnect_lock:
-            log.info("Initiating websocket connection sequence...")
-
-            # NOTE: This will just keep retrying forever. That's intentional,
-            # since this is a background service that is expected behavior and
-            # good user UX.
-
-            delay = 2
-            while not self.is_connected.is_set():
-                try:
-                    # 4 possible scenarios:
-                    #   1. No exception: we should be connected, loop will break
-                    #   2. bad exception: raise it (its cause of traceback mode)
-                    #   3. normal exception (timeouts, etc): backoff and retry
-                    #   4. Cancel - just raise
-                    await self._connect()
-                except asyncio.CancelledError:
-                    # Standard cancel, must raise up to _start
-                    raise
-                except (
-                    ssl.SSLError,
-                    ws_exceptions.InvalidURI,
-                    socket.gaierror,
-                    json.JSONDecodeError,
-                    ValueError,
-                ):
-                    # NOTE: The only reason we'd catch one of these here is if we're in
-                    # trace mode because trace just raises all exceptions, so we need
-                    # to move it along here as well.
-                    raise
-                except Exception:
-                    log.error("Reconnect attempt failed. Retrying in %ss...", delay)
-                    await asyncio.sleep(delay)
-                    # Exponential backoff
-                    delay = min(delay * 2, MAX_RECONNECT_WAIT)
-
-            log.debug("Broke out the connection loop so we must be connected now")
-            assert self.is_connected.is_set()
-            return True
-
-    # NOTE: Just to refresh your brain on how this works if you're rusty, in a
-    # proper websocket client architecture, the sending logic and the receiving logic
-    # are separated into two different concerns. The sending logic is the "writer"
-    # and the receiving logic is the "reader". Technically, sending and receiving
-    # are two different streams, websockets just abstract that into one interface.
-    # That's why we need the pending dict. __call__ just fires off the request
-    # and returns a future.
-
-    async def __call__(self, payload: dict[str, Any]) -> dict[str, Any]:
-
-        if not self.ws_conn:
-            log.warning("Request received but client is not connected")
-            return {"result": "NOT CONNECTED"}
-
-        # check connection is alive before makig request
-        try:
-            # The request wait time adds a buffer in case its in the middle of
-            # trying to reconnect
-            await asyncio.wait_for(self.is_connected.wait(), timeout=REQUEST_WAIT_TIME)
-        except TimeoutError:
-            raise TimeoutError(
-                "TrueNAS API request timed out waiting for websocket reconnection."
-            )
-
-        payload["jsonrpc"] = "2.0"
-        if "id" not in payload:
-            payload["id"] = self.req_id
-            self.req_id += 1
-
-        future: asyncio.Future[dict[str, Any]] = self.loop.create_future()
-
-        self.pending[payload["id"]] = future
-
-        try:
-            await self.ws_conn.send(json.dumps(payload))
-        except Exception:
-            # Clean up the pending dict if the send fails instantly, otherwise
-            # the request will be stuck in memory
-            self.pending.pop(payload["id"], None)
-            raise
-
-        # return await future
-        try:
-            return await asyncio.wait_for(future, timeout=RESPONSE_TIMEOUT)
-        except TimeoutError as e:
-            # Clean up the pending dict so it doesn't leak
-            self.pending.pop(payload["id"], None)
-            raise TimeoutError(
-                "TrueNAS API failed to respond to the RPC call in time."
-            ) from e
-
-    @property
-    def call(self):
-        return self.__call__
-
+    # Used in _start
     async def _reader_loop(self) -> None:
 
         # NOTE: This comment section is copied from the websockets.connect docstring:
@@ -487,7 +585,7 @@ class TrueNASClient:
 
                 log.info("Request #%s was successful", req_id)
 
-                # The future was awaited in the __call__ method. So when we
+                # The future was awaited in the call() method. So when we
                 # set the result, this signals to the original caller (aiohttp)
                 # that the call is complete.
                 future.set_result(data)

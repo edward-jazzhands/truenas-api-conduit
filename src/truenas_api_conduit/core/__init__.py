@@ -8,9 +8,11 @@ import platformdirs
 
 # project
 from truenas_api_conduit import APP_NAME
-from .setup_app_dir import ensure_config as _ensure_config
-from .setup_app_dir import ensure_storage_dir as _ensure_storage_dir
-from .global_enums import Platform, InstallType, Endpoints
+from truenas_api_conduit.core.setup_app_dir import ensure_config as _ensure_config
+from truenas_api_conduit.core.setup_app_dir import ensure_storage_dir as _ensure_storage_dir
+from truenas_api_conduit.core.global_enums import Platform, InstallType, Endpoints
+from truenas_api_conduit.core.os_error import examine_os_error
+from truenas_api_conduit.core.msg_receiver import MessageReceiver
 
 __all__ = [
     "ensure_config",
@@ -20,6 +22,8 @@ __all__ = [
     "PLATFORM",
     "CONFIG_DIR",
     "CONFIG_PATH",
+    "examine_os_error",
+    "MessageReceiver",
 ]
 
 

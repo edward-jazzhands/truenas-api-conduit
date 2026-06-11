@@ -12,7 +12,8 @@ if TYPE_CHECKING:
     # the config is frozen. As such we need to defer importing it until
     # we've had a chance to set that global.
     from truenas_api_conduit.config import Config
-    from truenas_api_conduit.core.ws_client import TrueNASClient
+    
+    # from truenas_api_conduit.core.ws_client import TrueNASClient
 
 # third party
 import pydantic
@@ -21,33 +22,15 @@ from aiohttp.web_runner import GracefulExit
 
 # project
 from truenas_api_conduit import LOCK_FILE
+import truenas_api_conduit.core as core
 from truenas_api_conduit.console import console_stderr
 import truenas_api_conduit.log_setup as log_setup
 import truenas_api_conduit.core.endpoints as endpoints
 
-#! NOT ASYNC
-# def handle_exit(*_):
-#     print("\nShutting down.")
-#     sys.exit(0)
-
-# signal.signal(signal.SIGINT, handle_exit)
-# signal.signal(signal.SIGTERM, handle_exit)
-
-# if sys.platform != "win32":
-#     signal.signal(signal.SIGHUP, handle_exit)
-#     signal.signal(signal.SIGQUIT, handle_exit)
 
 
 log_setup.init_logging()
 log = logging.getLogger(__name__)
-
-
-# def handle_async_exit(client: TrueNASClient):
-#     log.info("Received OS shutdown signal.")
-#     await client.close()
-#     log.info("Websocket client shutdown successfully")
-#     # NOTE: once the client has shut itself down gracefully, the aiohttp
-#     # server should run the teardown in truenas_context_manager 
 
 
 def create_lockfile(cfg: Config):
@@ -71,6 +54,18 @@ def create_lockfile(cfg: Config):
     LOCK_FILE.chmod(0o600)  # HACK: This won't do anything on windows.
 
 
+async def watch_messages(receiver: core.MessageReceiver) -> None:
+    # This watches the message reciever for messages from the
+    # TrueNASClient.
+
+    while True:
+        # Suspends until __call__ sets the event.
+        await receiver
+        messages = receiver.drain()
+        for message in messages:
+            print(message)
+
+
 async def truenas_context_manager(app: web.Application):
 
     # NOTE: This uses the "context manager generator" pattern. It must have
@@ -90,23 +85,19 @@ async def truenas_context_manager(app: web.Application):
 
     log.info("Starting TrueNAS API websocket client")
     loop = asyncio.get_running_loop()
-    client = TrueNASClient(cfg, loop)
+
+    receiver = core.MessageReceiver()
+    loop.create_task(watch_messages(receiver))
+
+    client = TrueNASClient(cfg, loop, receiver)
     app["truenas_client"] = client
     create_lockfile(cfg)
 
-    # try:
-    #     loop.add_signal_handler(signal.SIGINT, handle_async_exit, client)
-    #     loop.add_signal_handler(signal.SIGTERM, handle_async_exit, client)
-    # except NotImplementedError:
-    #     # this will happen on windows
-    #     pass
-    #     #! Do we want to register these?
-    #     # loop.add_signal_handler(signal.SIGHUP, handle_async_exit)
-    #     # loop.add_signal_handler(signal.SIGQUIT, handle_async_exit)
-
     # NOTE: This method creates and manages its own background task with
     # asyncio.create_task.
-    app["truenas_task"] = client.start()
+    task = client.start()
+    task.add_done_callback(lambda _t: app["shutdown_event"].set())
+    app["truenas_task"] = task
 
     # The 'wrap yield in try/finally' pattern. Its kind of a brainfuck
     # because we've essentially turned the entirely of the program
@@ -116,23 +107,23 @@ async def truenas_context_manager(app: web.Application):
     # function resumes control to cleanup, this will catch it to run our
     # finally block.
     # Half of me thinks this is awesome and the other half is like
-    # "what in the ever loving fuck, why is this possible"
+    # "what in the fuck, why is this possible"
 
     try:
         yield
-    except (GracefulExit, asyncio.CancelledError):
-        log.warning("Server shutdown interrupted TrueNAS")
     finally:
-        # <>-+-<>-+-<>-+-<>-+-<>-+-<>-+-<>-+-<>-+-<>-+-<>
-        # TEARDOWN
-        await client.close()
+        # *<>-+-<>-+-<>-+-<>-+-<>-+-<>-+-<>-+-<>-+-<>-+-<>
+        # TEARDOWN - this is equivalent to aiohttp's on_cleanup hook
 
-        log.info("Running aiohttp teardown")
-        try:
-            os.remove(LOCK_FILE)
-        except FileNotFoundError:
-            pass
+        log.info("Running service teardown")
+        LOCK_FILE.unlink(missing_ok=True)
 
+        close_result = await client.close()
+        log.debug(close_result)
+        if close_result.is_closed:
+            log.info("The TrueNAS websocket client closed itself gracefully")
+        else:
+            log.warning(close_result.msg)
 
 async def main(cfg: Config) -> None:
 
@@ -140,10 +131,27 @@ async def main(cfg: Config) -> None:
 
     app = web.Application()
     app["config"] = cfg
+    app["message_receiver"] = core.MessageReceiver()
+
+    shutdown_event = asyncio.Event()
+    app["shutdown_event"] = shutdown_event
+
+    def handle_async_exit():
+        log.info("Received OS shutdown signal.")
+        app["shutdown_event"].set()
+
+    loop = asyncio.get_running_loop()
+    try:
+        loop.add_signal_handler(signal.SIGINT, handle_async_exit)
+        loop.add_signal_handler(signal.SIGTERM, handle_async_exit)
+    except NotImplementedError:
+        # this will happen on windows
+        loop.add_signal_handler(signal.SIGHUP, handle_async_exit)
+        loop.add_signal_handler(signal.SIGQUIT, handle_async_exit)
 
     app.router.add_post("/request", endpoints.request_handler)
     app.router.add_get("/status", endpoints.status)
-    app.router.add_post("/shutdown", endpoints.shutdown)
+    app.router.add_post("/stop", endpoints.stop)
     app.router.add_post("/restart", endpoints.restart)
 
     # manages the lifecycle
@@ -157,23 +165,24 @@ async def main(cfg: Config) -> None:
     log.info("HTTP server started")
 
     try:
-        await asyncio.Event().wait()
-    except (GracefulExit, asyncio.CancelledError):
-        log.info("Received exit command")
-        pass  #  we pass here to let runner.cleanup() run
+        await shutdown_event.wait()
+    except (GracefulExit, asyncio.CancelledError) as e:
+        log.debug("Received exit command (%s)", e.__class__.__name__)
+    else:
+        log.debug("TrueNAS client task finished with no error")
     finally:
         # will run the teardown in truenas_context_manager:
         await runner.cleanup()
 
 
-def error_handler(err_string: str, log_level: str):
+def error_handler(err_string: str, log_level: str, e: BaseException):
 
     if log_level.lower() == "debug":
         log.exception(err_string)
         sys.exit(1)
     elif log_level.lower() == "trace":
         log.error(err_string)
-        raise
+        raise e
     else:
         log.error(err_string)
         sys.exit(1)
@@ -232,25 +241,15 @@ def start():
     try:
         asyncio.run(main(cfg), debug=(level_name.lower() == "trace"))
     except OSError as e:
-        err_string = f"{getattr(e, '__module__', 'none')}.{repr(e)} "
-        err_string += str(e) if str(e) else ""
-        if e.strerror:
-            err_string += f": {e.strerror}"
-        if e.errno:
-            err_string += f"  (Code: {e.errno})"
-        if e.__context__:
-            full_context = (
-                f"{getattr(e.__context__, '__module__', 'none')}.{repr(e.__context__)}"
-            )
-            err_string += f"\n  Occurred while handling: {full_context}"
-        if e.__cause__:
-            full_cause = (
-                f"{getattr(e.__cause__, '__module__', 'none')}.{repr(e.__cause__)}"
-            )
-            err_string += f"\n  Caused by: {full_cause}"
-        error_handler(err_string, level_name)
+        #! im not 100% sure this is necessary here
+        # If we got an OSError or other exception at this point then either
+        # we're in traceback mode, or something is very wrong.
+        err_string = core.examine_os_error(e)
+        error_handler(err_string, level_name, e)
     except Exception as e:
-        error_handler(str(e), logging.getLevelName(log_level))
+        error_handler(str(e), logging.getLevelName(log_level), e)
+    finally:
+        log.info("Program shutting down now")
 
 
 if __name__ == "__main__":

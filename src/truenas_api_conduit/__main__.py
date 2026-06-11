@@ -595,7 +595,7 @@ def stop(ctx: click.RichContext) -> None:
         )
         sys.exit(1)
 
-    response = request_helper(core.Endpoints.SHUTDOWN, {})  # needs empty dict to POST
+    response = request_helper(core.Endpoints.STOP, {})  # needs empty dict to POST
     if ctx.obj.pretty:
         try:
             ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
@@ -881,6 +881,8 @@ def config(ctx: click.RichContext) -> None:
 
     editor = os.environ.get("EDITOR")
     if editor:
+        console_stderr.print("Remember you must restart the service to apply any changes",
+        style="italic")
         os.execvp(editor, [editor, core.CONFIG_PATH])
     else:
         err_string = (

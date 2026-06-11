@@ -85,7 +85,7 @@ async def request_handler(request: web.Request) -> web.Response:
     log.info("Request payload: %s", payload)
 
     client: TrueNASClient = request.app["truenas_client"]
-    result = await client(payload)
+    result = await client.call(payload)
     log.info("Request successful")
     log.debug("Response: %s,", result)
 
@@ -110,14 +110,9 @@ async def status(request: web.Request) -> web.Response:
     return web.json_response(result)
 
 
-async def _shutdown() -> None:
-    await asyncio.sleep(0.1)
-    raise GracefulExit()
+async def stop(request: web.Request) -> web.Response:
 
-
-async def shutdown(request: web.Request) -> web.Response:
-
-    log.info("Shutdown command received")
+    log.info("Stop command received")
 
     header = check_request_header(request)
     if header == RequestHeader.MISSING:
@@ -125,10 +120,9 @@ async def shutdown(request: web.Request) -> web.Response:
     elif header == RequestHeader.INCORRECT:
         return web.json_response({"error": "Incorrect header"}, status=400)
 
-    client: TrueNASClient = request.app["truenas_client"]
-    await client.close()  # this waits until it is fully closed and cleaned up
-    asyncio.ensure_future(_shutdown())
-    return web.json_response({"result": "Shutting down"})
+    request.app["shutdown_event"].set()
+
+    return web.json_response({"result": "Stopping the conduit service"})
 
 
 async def restart(request: web.Request) -> web.Response:
@@ -161,4 +155,4 @@ async def restart(request: web.Request) -> web.Response:
         os.execvp(dname, [dname])
 
     asyncio.ensure_future(_restart())
-    return web.json_response({"result": "Restarting"})
+    return web.json_response({"result": "Restarting the conduit service"})
