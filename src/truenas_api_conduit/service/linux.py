@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 # local
 from truenas_api_conduit import APP_NAME, SERVICENAME, InstallType
 from truenas_api_conduit.core import examine_os_error
-from truenas_api_conduit.service.base import BaseService
+from truenas_api_conduit.service.base import BaseService, ServiceError
 from truenas_api_conduit.console import console_stdout  # , console_stderr
 
 # NOTE: log messages are configured to go to stderr
@@ -142,9 +142,20 @@ def get_systemd_unit_dir(install_type: InstallType) -> Path:
         case _:
             assert_never(install_type)
 
+# ? Common systemd/systemctl exit codes
+# Code| Meaning ----------------- |Description -----------------
+#   0 | Success/Active            |The program is running or service is OK.
+#   1 | Generic/Unspecified Error |The program is dead and the `/var/run` pid file exists.
+#   2 | Invalid Argument          |Invalid or excess arguments were passed to the command.
+#   3 | Not Running               |The program is not running (stopped cleanly).
+#   4 | Unknown Program State     |The program or service is not installed or unknown.
+#  13 | Permission Denied         |The user does not have permission to perform the operation.
+# 200 | Working Dir Missing       |Working directory is missing or inaccessible
+# 203 | Executable Missing        |Executable is missing or inaccessible
+# 217 | No such user              |The specified user does not exist
+
 
 class LinuxService(BaseService):
-
     def __init__(self) -> None:
         self.install_type: InstallType | None = detect_existing_install()
         # Only set unit_path if we know the install type
@@ -153,6 +164,18 @@ class LinuxService(BaseService):
             if self.install_type
             else None
         )
+        #! LAST THOUGHT: use error mapping for results of systemctl commands?
+        self.error_mapping = {
+            1: "The service failed to start or stopped unexpectedly. Please check your system logs.",
+            2: None,  # this means private/user does not need to know
+            3: None,
+            4: "Installation failed: The service configuration file could not be found.",
+            13: "Administrative privileges are required. Please run this application as root/sudo.",
+            200: "The service could not start because its working directory is missing or inaccessible.",
+            203: "The service executable could not be found or executed. Verify the installation paths.",
+            217: "The required system user account for this service does not exist."
+        }
+        
         log.info("Initialized %s", self)
 
     def __repr__(self) -> str:
@@ -162,11 +185,12 @@ class LinuxService(BaseService):
         self,
         *args: str,
         color: bool = False,
-        show_error_warning: bool = False,
+        required: bool = False,
+        show_error_warning: bool = True,
     ) -> subprocess.CompletedProcess[str]:
-        # Run a `systemctl` command. Dynamically appends --user if needed.
-        # If require, raise RuntimeError on non-zero exit."
-
+        """Run a systemctl command. Detects install type and appends --user if needed.
+        If required, raise ServiceError on non-zero exit."""
+        
         # NOTE: systemctl checks $PAGER and $TERM, not just whether stdout is
         # a TTY. Even with captured stdout, it can invoke a pager if those env vars
         # are set (e.g. PAGER=less in the user's shell
@@ -194,27 +218,42 @@ class LinuxService(BaseService):
         result = subprocess.run(cmd, capture_output=True, text=True, env=env)
 
         log.debug("%s command returned code: %d", *args, result.returncode)
-        if result.returncode != 0:
-            if show_error_warning:
-                log.warning(
-                    "%s command failed: %s",
-                    *args,
-                    (result.stderr + result.stdout).strip()
-                )
-            else:
-                log.debug(
-                    "%s command failed (ignored): %s",
-                    *args,
-                    (result.stderr + result.stdout).strip()
-                )
 
+        if result.returncode != 0:
+
+            # If required, raise an error
+            # If not required, log a warning and continue
+            # If not required and no warning needed, make a debug log
+            if required:
+                err_string = (
+                    f" Command failed. (Code {result.returncode})\n"
+                    f"Command: {' '.join(cmd)}\n"
+                    f"Output:\n"
+                    f"{result.stderr}"
+                )
+                if mapping := self.error_mapping.get(result.returncode):
+                    err_string += f"\n{mapping}"
+                raise ServiceError(err_string)
+            else:
+                if show_error_warning:
+                    log.warning(
+                        "%s command failed: %s",
+                        *args,
+                        (result.stderr or result.stdout).strip()
+                    )
+                else:
+                    log.debug(
+                        "%s command failed (ignored): %s",
+                        *args,
+                        (result.stderr or result.stdout).strip()
+                    )
 
         return result
 
     def install(self, install_type: InstallType) -> None:
         # Writes the systemd unit file and enables the service.
-        # Also calls `loginctl enable-linger` (if user install) so the user unit survives logout
-        # and starts on boot without requiring an interactive session.
+        # Also calls `loginctl enable-linger` (if user install) so the user unit
+        # survives logout and starts on boot without requiring an interactive session.
 
         # NOTE: This entire function will be wrappped by a try/except block
         # by the CLI when it runs it, so anything we don't catch here will
@@ -262,40 +301,37 @@ class LinuxService(BaseService):
         console_stdout.print("Unit file written to: %s", self.unit_path)
 
         # NOTE: The commands we will get here are:
-        #  - systemctl [--user] daemon-reload
-        #  - systemctl [--user] enable <path-to-unit-file>
+        # - systemctl [--user] daemon-reload
+        # - systemctl [--user] enable <path-to-unit-file>
 
-        #! LAST THOUGHT: I need to go through these systemctl commands and
+        #! LAST THOUGHT: I need to go through all these systemctl commands and
         # validate which ones are actually required and will necessitate
-        # stopping the function if they fail.
-        
-        try:
-            self._systemctl(
-                "daemon-reload", show_error_warning=True
-            )
-        
-            # NOTE: Install passes the full unit file path instead of just UNIT_NAME.
-            # Enabling by name requires the unit to have already been installed.
-            # For first installs you have to always pass the full path 
-            self._systemctl(
-                "enable",
-                str(self.unit_path),
-                show_error_warning=True
-            )
-        except Exception as e:
-            log.error("Failed to enable systemd unit: %s", e)
-            raise  # hoist it to CLI
+        # stopping the outer functions if they fail.
+
+        self._systemctl(
+            "daemon-reload", required=True
+        )
+    
+        # NOTE: Install passes the full unit file path instead of just UNIT_NAME.
+        # Enabling by name requires the unit to have already been installed.
+        # For first installs you have to always pass the full path 
+        self._systemctl(
+            "enable",
+            str(self.unit_path),
+            required=True
+        )
+
         console_stdout.print(f"Enabled systemd unit: {self.unit_path}")
 
         if self.install_type == InstallType.USER:
             # this will allow the user unit to run without an active login session
             username = pwd.getpwuid(os.getuid()).pw_name
-            result = subprocess.run(
+            result3 = subprocess.run(
                 ["loginctl", "enable-linger", username],
                 capture_output=True,
                 text=True,
             )
-            if result.returncode == 0:
+            if result3.returncode == 0:
                 console_stdout.print(
                     "Enabled 'linger' for user service. That's systemd's fancy way "
                     "of saying the service will start on boot without user login."
@@ -317,8 +353,17 @@ class LinuxService(BaseService):
             console_stdout.print("No service installation detected.")
             return
 
-        # Best-effort stop, ignore errors if already stopped.
-        self._systemctl("stop", UNIT_NAME)
+        result1 = self._systemctl("stop", UNIT_NAME, show_error_warning=False)
+        if result1.returncode == 3:
+            # this means the service is already stopped, so we can ignore the error
+            log.debug("Service already stopped, ignoring error")
+        elif result1.returncode != 0:
+            log.warning(
+                "Failed to stop the service (exit code %d): %s",
+                result1.returncode,
+                (result1.stderr or result1.stdout).strip()
+            )
+            # It should be possible to ignore this error and just plough through
 
         # disable can fail if the unit is already disabled or
         # partially removed, so we treat it as best-effort.
@@ -337,7 +382,7 @@ class LinuxService(BaseService):
                 raise
 
         self._systemctl(
-            "daemon-reload", show_error_warning=True
+            "daemon-reload", required=True
         )
 
         # clear the unit's failure state, ensuring that systemd
@@ -349,7 +394,6 @@ class LinuxService(BaseService):
         # running, I'll want this to be here.
         self.install_type = None
         self.unit_path = None
-        console_stdout.print("Service uninstalled successfully.")
 
     def start(self, cfg: Config) -> None:
         # TODO: The config is not used here yet, but it should be in order to
@@ -358,20 +402,15 @@ class LinuxService(BaseService):
         # This might require writing them out to a temp file or something, since
         # the service has to start by itself and can't use the stdin startup
 
-        #! TODO: These should return the result and exit code back to
-        # the CLI maybe instead of just printing/showing it here? Cleaner
-        # separation of concerns.
-
         # `systemctl [--user] start truenas-api-conduit`
-        result = self._systemctl(
-            "start", UNIT_NAME, show_error_warning=True
+        self._systemctl(
+            "start", UNIT_NAME, required=True
         )
 
     def stop(self) -> None:
         # `systemctl [--user] stop truenas-api-conduit`
-        result = self._systemctl(
-            "stop", UNIT_NAME, show_error_warning=True
-        )
+
+        self._systemctl("stop", UNIT_NAME, required=True)
 
     # systemd Restart vs Reload
     # Restart: kills the process and starts a new one with a new pid
@@ -383,12 +422,10 @@ class LinuxService(BaseService):
 
     def restart(self) -> None:
         # `systemctl [--user] restart truenas-api-conduit`
-        # NOTE: 'restart' kills and restarts the process. 'reload' sends a SIGHUP to
-        # re-read configs without dying.
-        result = self._systemctl(
-            "restart", UNIT_NAME, show_error_warning=True
+
+        self._systemctl(
+            "restart", UNIT_NAME, required=True
         )
-        log.info("Service restarted.")
 
     def status(self, stdout: bool = True) -> int:
         # Print live service status directly from systemctl.

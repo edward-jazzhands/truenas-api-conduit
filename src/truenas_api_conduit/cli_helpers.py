@@ -72,6 +72,11 @@ def logging_setup(ctx: click.RichContext) -> None:
     log_mapping = logging.getLevelNamesMapping()
     log_level: int = logging.getLogger().level  # starts at WARNING
 
+    log_env = os.environ.get("LOG_LEVEL")
+    if log_env:
+        log_level = log_mapping[log_env.upper()]
+
+    # If verbosity is set, it overrides the env var
     if ctx.obj.verbose > 0:
         if ctx.obj.verbose == 1:
             log_level = log_mapping["INFO"]  # 20
@@ -107,7 +112,7 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
     # Pydantic will not be loaded until this following import. Its one
     # of the heavier dependencies so this improves startup time marginally.
     from truenas_api_conduit.config import Config
-    from truenas_api_conduit.config.keyring_backends import (
+    from truenas_api_conduit.config.file_encrypter import (
         PasswordGetError,
         GetErrorEnum,
     )

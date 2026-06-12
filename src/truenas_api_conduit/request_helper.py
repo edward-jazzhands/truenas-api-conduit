@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 import psutil
 
 # project
-from truenas_api_conduit import APP_NAME, LOCK_FILE
+from truenas_api_conduit import APP_NAME, LOCK_FILE, Endpoints
 import truenas_api_conduit.core as core
 
 log = logging.getLogger(__name__)
@@ -44,12 +44,12 @@ class RequestHelper:
         return f"RequestHelper(address={self.address}, port={self.port})"
 
     def __call__(
-        self, endpoint: core.Endpoints, json_dict: dict[str, Any] | None = None
+        self, endpoint: Endpoints, json_dict: dict[str, Any] | None = None
     ) -> requests.Response:
         """no json = GET
         pass in json = POST"""
 
-        if endpoint not in core.Endpoints:
+        if endpoint not in Endpoints:
             raise ValueError(f"Invalid endpoint: {endpoint}")
 
         log.info("Making request")

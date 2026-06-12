@@ -30,6 +30,7 @@ from truenas_api_conduit.cli_helpers import (
     prompt_for_config,
 )
 from truenas_api_conduit.request_helper import get_request_helper
+from truenas_api_conduit.service import get_service_manager, ServiceError
 
 log = logging.getLogger(__name__)
 
@@ -331,7 +332,6 @@ def start(
 
     else:
         log.info("Telling OS to start the service")
-        from truenas_api_conduit.service import get_service_manager
         from truenas_api_conduit.core import PLATFORM
 
         service = get_service_manager(PLATFORM)
@@ -341,13 +341,15 @@ def start(
         try:
             service.start(cfg)
         except Exception as e:
-            if ctx.obj.verbose >= 3:
+            if cfg.log_level == "trace":
                 raise
             else:
-                err_string = (
-                    "Unexpected error while starting the service: "
-                    f"\n\n{e}"
-                )
+                action = "starting"
+                if isinstance(e, ServiceError):
+                    err_string = f"Encountered a systemd/systemctl error while {action} the service: "
+                else:
+                    err_string = f"Unexpected error while {action} the service: "
+                err_string += f"\n\n{e} ({e.__class__.__name__})"
                 panel = make_usage_error_panel(err_string, "Service Start Error")
                 console_stderr.print(panel) 
                 sys.exit(1)
@@ -394,7 +396,7 @@ def install(
         console_stderr.print("Cancelled")
         sys.exit(1)
 
-    from truenas_api_conduit.service import get_service_manager
+    cfg = config_setup(ctx.obj)
     service = get_service_manager(core.PLATFORM)
 
     try:
@@ -405,20 +407,16 @@ def install(
         else:
             service.install(InstallType.USER)
     except Exception as e:
-
-        #! TODO: Using verbose in the CLI here will not respect the log
-        # level if the user has set it as an env var or in the config file.
-        # The config file probably can't be helped because it needs pydantic
-        # and that adds startup time to everything. But some things like installing
-        # definitely can load pydantic, startup time is not an issue here.
-        if ctx.obj.verbose >= 3:
+        if cfg.log_level == "trace":
             raise
         else:
-            err_string = (
-                "Unexpected error while installing the service: "
-                f"\n\n{e} ({e.__class__.__name__})"
-            )
-            panel = make_usage_error_panel(err_string, "Installation Error")
+            action = "installing"
+            if isinstance(e, ServiceError):
+                err_string = f"Encountered a systemd/systemctl error while {action} the service: "
+            else:
+                err_string = f"Unexpected error while {action} the service: "
+            err_string += f"\n\n{e} ({e.__class__.__name__})"
+            panel = make_usage_error_panel(err_string, "Service Start Error")
             console_stderr.print(panel) 
             sys.exit(1)
 
@@ -439,21 +437,23 @@ def uninstall(ctx: click.RichContext) -> None:
         console_stderr.print("Cancelled")
         sys.exit(1)
 
-    from truenas_api_conduit.service import get_service_manager
+    cfg = config_setup(ctx.obj)
     service = get_service_manager(core.PLATFORM)
 
     try:
         service.uninstall()
     except Exception as e:
-        if ctx.obj.verbose >= 3:
+        if cfg.log_level == "trace":
             raise
         else:
-            err_string = (
-                "Unexpected error while uninstalling the service: "
-                f"\n\n{e}"
-            )
-            panel = make_usage_error_panel(err_string, "Error Uninstalling")
-            console_stderr.print(panel)
+            action = "uninstalling"
+            if isinstance(e, ServiceError):
+                err_string = f"Encountered a systemd/systemctl error while {action} the service: "
+            else:
+                err_string = f"Unexpected error while {action} the service: "
+            err_string += f"\n\n{e} ({e.__class__.__name__})"
+            panel = make_usage_error_panel(err_string, "Service Start Error")
+            console_stderr.print(panel) 
             sys.exit(1)
 
 
@@ -672,21 +672,26 @@ def stop(ctx: click.RichContext) -> None:
     # 2) Send the service a stop request
 
     # Option 1: Service manager
-    from truenas_api_conduit.service import get_service_manager
     service = get_service_manager(core.PLATFORM)
 
     try:
-        service.uninstall()
+        service.stop()
     except Exception as e:
-        if ctx.obj.verbose >= 3:
+        # We don't load config for this command so just check log level
+        log_level = logging.getLogger().level
+        level_name = logging.getLevelName(log_level)
+        if level_name.lower() == "trace":
             raise
         else:
-            err_string = (
-                "Unexpected error while uninstalling the service: "
-                f"\n\n{e}"
-            )
-            panel = make_usage_error_panel(err_string, "Error Uninstalling")
+            action = "stopping"
+            if isinstance(e, ServiceError):
+                err_string = f"Encountered a systemd/systemctl error while {action} the service: "
+            else:
+                err_string = f"Unexpected error while {action} the service: "
+            err_string += f"\n\n{e} ({e.__class__.__name__})"
+            panel = make_usage_error_panel(err_string, "Service Start Error")
             console_stderr.print(panel) 
+            sys.exit(1)
 
     # Option 2: Sending a request
     request_helper = get_request_helper()
@@ -735,17 +740,23 @@ def restart(ctx: click.RichContext) -> None:
     service = get_service_manager(core.PLATFORM)
 
     try:
-        service.uninstall()
+        service.restart()
     except Exception as e:
-        if ctx.obj.verbose >= 3:
+        # We don't load config for this command so just check log level
+        log_level = logging.getLogger().level
+        level_name = logging.getLevelName(log_level)
+        if level_name.lower() == "trace":
             raise
         else:
-            err_string = (
-                "Unexpected error while uninstalling the service: "
-                f"\n\n{e}"
-            )
-            panel = make_usage_error_panel(err_string, "Error Uninstalling")
+            action = "restarting"
+            if isinstance(e, ServiceError):
+                err_string = f"Encountered a systemd/systemctl error while {action} the service: "
+            else:
+                err_string = f"Unexpected error while {action} the service: "
+            err_string += f"\n\n{e} ({e.__class__.__name__})"
+            panel = make_usage_error_panel(err_string, "Service Start Error")
             console_stderr.print(panel) 
+            sys.exit(1)
 
     # Option 2: Sending a request
     request_helper = get_request_helper()
@@ -796,16 +807,21 @@ def status(ctx: click.RichContext) -> None:
     try:
         service.status(stdout=True)
     except Exception as e:
-        if ctx.obj.verbose >= 3:
+        # We don't load config for this command so just check log level
+        log_level = logging.getLogger().level
+        level_name = logging.getLevelName(log_level)
+        if level_name.lower() == "trace":
             raise
         else:
-            err_string = (
-                "Unexpected error while checking the service status: "
-                f"\n\n{e}"
-            )
-            panel = make_usage_error_panel(err_string, "Error Uninstalling")
+            action = "checking status of"
+            if isinstance(e, ServiceError):
+                err_string = f"Encountered a systemd/systemctl error while {action} the service: "
+            else:
+                err_string = f"Unexpected error while {action} the service: "
+            err_string += f"\n\n{e} ({e.__class__.__name__})"
+            panel = make_usage_error_panel(err_string, "Service Start Error")
             console_stderr.print(panel) 
-            # sys.exit(1) #! we do both checks?
+            sys.exit(1)
 
     # Option 2: Sending a request
     request_helper = get_request_helper()

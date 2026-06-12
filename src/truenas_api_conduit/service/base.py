@@ -8,6 +8,12 @@ from truenas_api_conduit import InstallType
 from truenas_api_conduit.core import Platform
 
 
+class ServiceError(Exception):
+    "Base class for service errors."
+
+
+
+
 class BaseService(ABC):
 
     @abstractmethod
@@ -19,7 +25,7 @@ class BaseService(ABC):
         pass
 
     @abstractmethod
-    def start(self, cfg: Config):
+    def start(self, cfg: Config) -> None:
         pass
 
     @abstractmethod
@@ -32,8 +38,9 @@ class BaseService(ABC):
 
     @abstractmethod
     def status(self, stdout: bool = True) -> int:
-        """should return the exit code of the service status command after
-        printing it to stdout."""
+        # Status should print whatever the actual service manager prints to stdout
+        # and *then* return the exit code of the command (at least on Linux, not sure
+        # if this equally applies to mac and windows)
         pass
 
 

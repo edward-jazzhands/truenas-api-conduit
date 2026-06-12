@@ -5,6 +5,5 @@
         "aaron-bond.better-comments",   // comment coloring
         "tamasfe.even-better-toml",     // pyproject.toml syntax highlighting
         "nefrob.vscode-just-syntax",    // Justfile syntax highlighting
-        "vemonet.stardog-rdf-grammars"  // SPARQL syntax highlighting
     ]
 }

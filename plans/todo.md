@@ -3,7 +3,6 @@
 [ ] Get service install working on Windows
 [ ] Write first version of dockerfile for the containerized service
 [ ] Add tracking of which versions of the TrueNAS API the current version is validated against (this should very rarely change)
-[ ] Pass through args to the help command
 [X] Make logging change to stdout when running in the service
 [X] Make prompt for encryption key retry on wrong key
 [X] Add connection diagnostic to the TrueNAS websocket client
