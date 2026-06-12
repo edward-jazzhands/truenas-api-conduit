@@ -2,30 +2,57 @@
 from typing import Final
 from pathlib import Path
 import sys
+from enum import Enum, StrEnum
 
 # third party
 import platformdirs
 
 # project
-from truenas_api_conduit import APP_NAME, Platform
+from truenas_api_conduit import APP_NAME
 from truenas_api_conduit.core.setup_app_dir import ensure_config as _ensure_config
 from truenas_api_conduit.core.setup_app_dir import (
     ensure_storage_dir as _ensure_storage_dir,
 )
 from truenas_api_conduit.core.os_error import examine_os_error
 from truenas_api_conduit.core.msg_receiver import MessageReceiver
+from truenas_api_conduit.core.read_lockfile import read_lockfile
 
 __all__ = [
     "ensure_config",
     "Platform",
+    "Endpoints",
+    "AppEnv",
     "PLATFORM",
     "CONFIG_DIR",
     "CONFIG_PATH",
     "examine_os_error",
     "MessageReceiver",
+    "read_lockfile",
     "CRYPT_KEY_PATH",
     "CRYPT_FILE_NAME",
 ]
+
+
+class Platform(Enum):
+    LINUX = "linux"
+    WINDOWS = "win32"
+    MACOS = "darwin"
+
+
+class Endpoints(StrEnum):
+    # this is a string enum because its used to build the URL like this:
+    # f"http://{self.address}:{self.port}{endpoint}",
+
+    REQUEST = "/request"
+    STATUS = "/status"
+    STOP = "/stop"
+    RESTART = "/restart"
+
+
+class AppEnv(Enum):
+    OS_SERVICE = "os_service"
+    STANDALONE = "standalone"
+    DOCKER = "docker"
 
 
 def detect() -> Platform:

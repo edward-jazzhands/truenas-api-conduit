@@ -14,7 +14,8 @@ if TYPE_CHECKING:
 
 # third party
 from aiohttp import web
-from aiohttp.web_runner import GracefulExit
+
+# from aiohttp.web_runner import GracefulExit
 
 # project
 from truenas_api_conduit import APP_NAME, SERVICENAME
@@ -22,7 +23,6 @@ from truenas_api_conduit.core import examine_os_error
 import truenas_api_conduit.log_setup as log_setup
 
 log_setup.init_logging()
-# log_setup.set_log_level(logging.DEBUG)
 log = logging.getLogger(__name__)
 
 

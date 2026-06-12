@@ -8,18 +8,17 @@ Supports User, System, and Package install types.
 import shutil
 import subprocess
 import sys
-import pwd
 import os
 from pathlib import Path
 import logging
-from typing import TYPE_CHECKING, assert_never, Final
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from truenas_api_conduit.config.user_config import Config
 
 # local
-from truenas_api_conduit import APP_NAME, SERVICENAME, InstallType
-from truenas_api_conduit.core import examine_os_error
+from truenas_api_conduit import APP_NAME, SERVICENAME
+import truenas_api_conduit.core as core
 from truenas_api_conduit.service.base import BaseService, ServiceError
 from truenas_api_conduit.console import console_stdout  # , console_stderr
 
@@ -38,28 +37,10 @@ __all__ = [
 ]
 
 
-def build_unit_file(executable: Path, install_type: InstallType) -> str:
+def build_unit_file(executable: Path) -> str:
 
     # systemd does not invoke a shell for ExecStart, so spaces must be escaped.
     executable_str = str(executable).replace(" ", r"\x20")
-
-    wanted_by = (
-        "default.target" if install_type == InstallType.USER else "multi-user.target"
-    )
-
-    # Sandboxing directives like ProtectHome can fail or break --user instances
-    # because user services ypically need access to the user's home directory.
-    # We only apply these to system/package level installs.
-    if install_type in (InstallType.SYSTEM, InstallType.PACKAGE):
-        security_block = (
-            "# These 4 security directives are only for system/package level installs:\n"
-            "NoNewPrivileges=true\n"
-            "PrivateTmp=true\n"
-            "ProtectSystem=strict\n"
-            "ProtectHome=read-only"
-        )
-    else:
-        security_block = ""
 
     return f"""\
 [Unit]
@@ -71,14 +52,15 @@ After=network-online.target
 Type=simple
 ExecStart={executable_str}
 Restart=always
-RestartSec=5
+RestartSec=10
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier={APP_NAME}
 Environment=PYTHONUNBUFFERED=1
-{security_block}
+Environment=TRUENAS_APP_ENV=os_service
+
 [Install]
-WantedBy={wanted_by}
+WantedBy=default.target
 """
 
 
@@ -105,8 +87,8 @@ def resolve_daemon_executable() -> Path:
     )
 
 
-def detect_existing_install() -> InstallType | None:
-    "Detects if the service is already installed and returns the install type."
+def detect_existing_install() -> bool:
+    "Detects if the service is already installed"
 
     # Priority: 1) User, 2) System, 3) Package
     # # HACK: WHat if there's more than one installed? This doesn't handle that
@@ -116,31 +98,9 @@ def detect_existing_install() -> InstallType | None:
     # configuration should take precedence over vendor defaults.
 
     if (SYSTEMD_USER_DIR / UNIT_NAME).exists():
-        return InstallType.USER
-    if (Path("/etc/systemd/system") / UNIT_NAME).exists():
-        return InstallType.SYSTEM
-    if (Path("/usr/lib/systemd/system") / UNIT_NAME).exists():
-        return InstallType.PACKAGE
-    return None
+        return True
+    return False
 
-
-def get_systemd_unit_dir(install_type: InstallType) -> Path:
-    "Returns the systemd unit directory for the given install type."
-
-    match install_type:
-        case InstallType.SYSTEM:
-            return Path("/etc/systemd/system")
-        case InstallType.USER:
-            return SYSTEMD_USER_DIR
-        case InstallType.PACKAGE:
-            return Path("/usr/lib/systemd/system")
-            #! FIXME: Package install should be handled automatically by the package
-            # manager, we're not supposed to manually copy stuff into this directory.
-            # The package manager will handle this for us so I'm not sure it will
-            # even need to use this function at all in that mode. But this will
-            # stay here until I'm sure.
-        case _:
-            assert_never(install_type)
 
 # ? Common systemd/systemctl exit codes
 # Code| Meaning ----------------- |Description -----------------
@@ -157,14 +117,10 @@ def get_systemd_unit_dir(install_type: InstallType) -> Path:
 
 class LinuxService(BaseService):
     def __init__(self) -> None:
-        self.install_type: InstallType | None = detect_existing_install()
-        # Only set unit_path if we know the install type
-        self.unit_path: Path | None = (
-            get_systemd_unit_dir(self.install_type) / UNIT_NAME
-            if self.install_type
-            else None
-        )
-        #! LAST THOUGHT: use error mapping for results of systemctl commands?
+        self.installed: bool = detect_existing_install()
+        self.unit_path: Path | None = SYSTEMD_USER_DIR / UNIT_NAME
+
+        #! this is not used at the moment
         self.error_mapping = {
             1: "The service failed to start or stopped unexpectedly. Please check your system logs.",
             2: None,  # this means private/user does not need to know
@@ -173,13 +129,13 @@ class LinuxService(BaseService):
             13: "Administrative privileges are required. Please run this application as root/sudo.",
             200: "The service could not start because its working directory is missing or inaccessible.",
             203: "The service executable could not be found or executed. Verify the installation paths.",
-            217: "The required system user account for this service does not exist."
+            217: "The required system user account for this service does not exist.",
         }
-        
+
         log.info("Initialized %s", self)
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(install_type={self.install_type!r})"
+        return f"{self.__class__.__name__}(installed={self.installed})"
 
     def _systemctl(
         self,
@@ -190,21 +146,11 @@ class LinuxService(BaseService):
     ) -> subprocess.CompletedProcess[str]:
         """Run a systemctl command. Detects install type and appends --user if needed.
         If required, raise ServiceError on non-zero exit."""
-        
+
         # NOTE: systemctl checks $PAGER and $TERM, not just whether stdout is
         # a TTY. Even with captured stdout, it can invoke a pager if those env vars
         # are set (e.g. PAGER=less in the user's shell
-        base_cmd: list[str] = ["systemctl", "--no-pager"]
-
-        match self.install_type:
-            case InstallType.USER:
-                cmd = [*base_cmd, "--user", *args]
-            case InstallType.SYSTEM | InstallType.PACKAGE:
-                cmd = [*base_cmd, *args]
-            case None:
-                raise ValueError("No install type detected")
-            case _:
-                assert_never(self.install_type)
+        cmd: list[str] = ["systemctl", "--no-pager", "--user", *args]
 
         # NOTE: passing os.environ: for --user mode, systemctl communicates
         # with the user's D-Bus session via DBUS_SESSION_BUS_ADDRESS (and
@@ -212,8 +158,9 @@ class LinuxService(BaseService):
         # and the --user call fails with "Failed to connect to bus: No such file
         # or directory". So passing the full environment is necessary here
 
-        # SYSTEMD_COLORS=1 is needed to force systemctl to use colors even tho
+        # NOTE: SYSTEMD_COLORS=1 is needed to force systemctl to use colors even tho
         # it will normally disable them when stdout is not a TTY.
+
         env: dict[str, str] = {**os.environ, "SYSTEMD_COLORS": "1" if color else "0"}
         result = subprocess.run(cmd, capture_output=True, text=True, env=env)
 
@@ -239,18 +186,18 @@ class LinuxService(BaseService):
                     log.warning(
                         "%s command failed: %s",
                         *args,
-                        (result.stderr or result.stdout).strip()
+                        (result.stderr or result.stdout).strip(),
                     )
                 else:
                     log.debug(
                         "%s command failed (ignored): %s",
                         *args,
-                        (result.stderr or result.stdout).strip()
+                        (result.stderr or result.stdout).strip(),
                     )
 
         return result
 
-    def install(self, install_type: InstallType) -> None:
+    def install(self) -> None:
         # Writes the systemd unit file and enables the service.
         # Also calls `loginctl enable-linger` (if user install) so the user unit
         # survives logout and starts on boot without requiring an interactive session.
@@ -261,16 +208,7 @@ class LinuxService(BaseService):
 
         # If there's already an existing install then this can just overwrite it
         # for now. This should maybe be improved in the future.
-        console_stdout.print(f"Starting installer type={install_type}")
-        self.install_type = install_type
-
-        if (
-            self.install_type in (InstallType.SYSTEM, InstallType.PACKAGE)
-            and os.geteuid() != 0
-        ):
-            raise PermissionError(
-                "System-level installations require root privileges (run with sudo)."
-            )
+        console_stdout.print("Starting installer")
 
         executable = resolve_daemon_executable()
         console_stdout.print(f"Daemon executable resolved to: {executable}")
@@ -279,23 +217,23 @@ class LinuxService(BaseService):
         # so that it doesn't leave any leftover files or new directories
         # if the install fails for any reason.
 
-        systemd_unit_dir = get_systemd_unit_dir(self.install_type)
+        systemd_unit_dir = SYSTEMD_USER_DIR
         try:
             systemd_unit_dir.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            err_string = examine_os_error(e)
+            err_string = core.examine_os_error(e)
             log.error("Failed to create systemd unit directory: %s", err_string)
             raise
         console_stdout.print("Created systemd unit directory: %s", systemd_unit_dir)
 
         self.unit_path = systemd_unit_dir / UNIT_NAME
-        unit_content = build_unit_file(executable, self.install_type)
+        unit_content = build_unit_file(executable)
         console_stdout.print("Unit path: %s", self.unit_path)
 
         try:
             self.unit_path.write_text(unit_content, encoding="utf-8")
         except OSError as e:
-            err_string = examine_os_error(e)
+            err_string = core.examine_os_error(e)
             log.error("Failed to write systemd unit file: %s", err_string)
             raise
         console_stdout.print("Unit file written to: %s", self.unit_path)
@@ -304,52 +242,19 @@ class LinuxService(BaseService):
         # - systemctl [--user] daemon-reload
         # - systemctl [--user] enable <path-to-unit-file>
 
-        #! LAST THOUGHT: I need to go through all these systemctl commands and
-        # validate which ones are actually required and will necessitate
-        # stopping the outer functions if they fail.
+        self._systemctl("daemon-reload", required=True)
 
-        self._systemctl(
-            "daemon-reload", required=True
-        )
-    
         # NOTE: Install passes the full unit file path instead of just UNIT_NAME.
         # Enabling by name requires the unit to have already been installed.
-        # For first installs you have to always pass the full path 
-        self._systemctl(
-            "enable",
-            str(self.unit_path),
-            required=True
-        )
-
+        # For first installs you have to always pass the full path
+        self._systemctl("enable", str(self.unit_path), required=True)
         console_stdout.print(f"Enabled systemd unit: {self.unit_path}")
-
-        if self.install_type == InstallType.USER:
-            # this will allow the user unit to run without an active login session
-            username = pwd.getpwuid(os.getuid()).pw_name
-            result3 = subprocess.run(
-                ["loginctl", "enable-linger", username],
-                capture_output=True,
-                text=True,
-            )
-            if result3.returncode == 0:
-                console_stdout.print(
-                    "Enabled 'linger' for user service. That's systemd's fancy way "
-                    "of saying the service will start on boot without user login."
-                )
-            else:
-                # Non-fatal: warn and continue. The service will still work when the
-                # user is logged in, it just won't auto-start on boot.
-                log.error(
-                    "loginctl enable-linger failed (service installed, but it will "
-                    "only start when you log in, not on boot)"
-                )                
-
         console_stdout.print("Service installed successfully, ready to start.")
 
     def uninstall(self) -> None:
         # Stop, disable, and remove the unit file.
 
-        if not self.install_type:
+        if not self.installed:
             console_stdout.print("No service installation detected.")
             return
 
@@ -361,7 +266,7 @@ class LinuxService(BaseService):
             log.warning(
                 "Failed to stop the service (exit code %d): %s",
                 result1.returncode,
-                (result1.stderr or result1.stdout).strip()
+                (result1.stderr or result1.stdout).strip(),
             )
             # It should be possible to ignore this error and just plough through
 
@@ -377,13 +282,11 @@ class LinuxService(BaseService):
                 self.unit_path.unlink(missing_ok=True)
                 log.info("Unit file removed: %s", self.unit_path)
             except OSError as e:
-                err_string = examine_os_error(e)
+                err_string = core.examine_os_error(e)
                 log.error("Failed to remove unit file: %s", err_string)
                 raise
 
-        self._systemctl(
-            "daemon-reload", required=True
-        )
+        self._systemctl("daemon-reload", required=True)
 
         # clear the unit's failure state, ensuring that systemd
         # forgets about the unit completely after removal.
@@ -392,20 +295,18 @@ class LinuxService(BaseService):
         # Reset class state for future proofing - this protects against nothing at all at
         # the moment but if I ever re-use this class in the future for something long
         # running, I'll want this to be here.
-        self.install_type = None
+        self.installed = False
         self.unit_path = None
 
     def start(self, cfg: Config) -> None:
         # TODO: The config is not used here yet, but it should be in order to
-        # pass in CLI options that the user may have set (--truenas-host and 
+        # pass in CLI options that the user may have set (--truenas-host and
         # --api-key) to the service.
         # This might require writing them out to a temp file or something, since
         # the service has to start by itself and can't use the stdin startup
 
         # `systemctl [--user] start truenas-api-conduit`
-        self._systemctl(
-            "start", UNIT_NAME, required=True
-        )
+        self._systemctl("start", UNIT_NAME, required=True)
 
     def stop(self) -> None:
         # `systemctl [--user] stop truenas-api-conduit`
@@ -423,9 +324,7 @@ class LinuxService(BaseService):
     def restart(self) -> None:
         # `systemctl [--user] restart truenas-api-conduit`
 
-        self._systemctl(
-            "restart", UNIT_NAME, required=True
-        )
+        self._systemctl("restart", UNIT_NAME, required=True)
 
     def status(self, stdout: bool = True) -> int:
         # Print live service status directly from systemctl.
@@ -448,3 +347,37 @@ class LinuxService(BaseService):
                 "systemctl status produced no output (exit code %d)", result.returncode
             )
             return 1
+
+    def detect_service(self) -> core.AppEnv:
+        # This exists to detect how the service is running. It's used by the
+        # CLI to determine how to send start/stop/reset commands to the service.
+
+        # First lets see if the lockfile exists.
+        if lock_dict := core.read_lockfile():
+            log.debug(
+                "Found lockfile with:\n" "PID: %s\nAddress: %s\nPort: %s",
+                lock_dict["pid"],
+                lock_dict["address"],
+                lock_dict["socket_port"],
+                lock_dict["app_env"],
+            )
+            # This would raise an error if the app_env is invalid, but I
+            # control the lock file so I can guarantee it's valid.
+            return core.AppEnv(lock_dict["app_env"])
+
+        # If we don't find a lockfile then move onto other methods...
+
+        status = self.status(stdout=False)
+        # 0 or 3 would indicate its a systemd installed service
+        # 0 = running (there should be a lockfile if that's the case)
+        # 3 = stopped
+        if status in (0, 3):
+            return core.AppEnv.OS_SERVICE
+
+        #! I believe anything else would indicate its not installed as a service,
+        # or just not installed in general. But im not 100% sure.
+        else:
+            # FIXME: improve this logic this is not very robust.
+            return core.AppEnv.STANDALONE
+
+        # NOTE: Docker should be irrelevant for this function

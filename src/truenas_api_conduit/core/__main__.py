@@ -23,6 +23,7 @@ from aiohttp.web_runner import GracefulExit
 # project
 from truenas_api_conduit import LOCK_FILE
 import truenas_api_conduit.core as core
+from truenas_api_conduit.app_globals import app_env, set_app_env
 from truenas_api_conduit.console import console_stderr
 import truenas_api_conduit.log_setup as log_setup
 import truenas_api_conduit.core.endpoints as endpoints
@@ -36,11 +37,13 @@ def create_lockfile(cfg: Config):
     if os.path.exists(LOCK_FILE):
         log.warning("Lockfile was not properly cleaned up after last run")
 
+    assert app_env is not None, "Tried running app with no app_env set"
     cfg_dict = {
         "pid": os.getpid(),
         "address": cfg.service_address,
         "socket_port": cfg.socket_port,
         "header": cfg.request_header,
+        "app_env": str(app_env.value),
     }
 
     with open(LOCK_FILE, "w") as f:
@@ -236,6 +239,27 @@ def start():
     log.info("Logging level is currently at %s", level_name)
     log.debug("Config: %s", cfg)
     log.debug("Config provenance: %s", cfg.provenance)
+
+    if local_app_env := os.environ.get("TRUENAS_APP_ENV"):
+        try:
+            local_app_env = core.AppEnv(local_app_env)
+        except ValueError:
+            if log_level <= level_mapping["TRACE"]:
+                raise
+            else:
+                log.error(
+                    "TRUENAS_APP_ENV Environment variable is not valid: %s",
+                    local_app_env,
+                )
+                sys.exit(1)
+    else:
+        if log_level <= level_mapping["TRACE"]:
+            raise ValueError("TRUENAS_APP_ENV environment variable is not set")
+        else:
+            log.error("TRUENAS_APP_ENV environment variable is not set")
+            sys.exit(1)
+
+    set_app_env(local_app_env)
 
     try:
         asyncio.run(main(cfg), debug=(level_name.lower() == "trace"))

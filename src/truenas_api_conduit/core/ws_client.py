@@ -1,6 +1,6 @@
 # standard library
 import asyncio
-from typing import Any, Final, Callable, TYPE_CHECKING
+from typing import Any, Final, TYPE_CHECKING
 import json
 import ssl
 from pathlib import Path
@@ -18,6 +18,7 @@ import websockets.exceptions as ws_exceptions
 
 # project
 from truenas_api_conduit import APP_NAME
+from truenas_api_conduit.app_globals import app_env
 from truenas_api_conduit.core import examine_os_error
 from truenas_api_conduit.errors import ConduitError
 from truenas_api_conduit.config import Config
@@ -211,6 +212,7 @@ class TrueNASClient:
             "client-status": client_status,
             "connected": connected,
             "client-server ping": ping,
+            "service mode": app_env,
             "req_id": self.req_id,
             "websocket host": self.ws_conn._host if self.ws_conn else None,
             "websocket port": self.ws_conn._port if self.ws_conn else None,

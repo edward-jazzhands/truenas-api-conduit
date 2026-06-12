@@ -3,7 +3,6 @@ from importlib.metadata import version
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from enum import Enum, StrEnum
 
 from rich.traceback import install as tb_install
 
@@ -17,9 +16,6 @@ __all__ = [
     "__version__",
     "log_setup",
     "COLORS",
-    "Platform",
-    "InstallType",
-    "Endpoints",
 ]
 
 # rich tracebacks
@@ -37,28 +33,6 @@ LOCK_FILE: Final[Path] = Path(tempfile.gettempdir()) / f"{APP_NAME}.lock"
 # platform defaults so it respects user/system overrides.
 
 __version__: Final[str] = version(APP_NAME)
-
-
-class Platform(Enum):
-    LINUX = "linux"
-    WINDOWS = "win32"
-    MACOS = "darwin"
-
-
-class InstallType(Enum):
-    USER = "user"
-    SYSTEM = "system"
-    PACKAGE = "package"
-
-
-class Endpoints(StrEnum):
-    # this is a string enum because its used to build the URL like this:
-    # f"http://{self.address}:{self.port}{endpoint}",
-
-    REQUEST = "/request"
-    STATUS = "/status"
-    STOP = "/stop"
-    RESTART = "/restart"
 
 
 @dataclass(frozen=True)

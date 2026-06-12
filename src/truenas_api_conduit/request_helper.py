@@ -2,7 +2,6 @@
 import sys
 import logging
 import os
-import json
 from typing import Any, TYPE_CHECKING
 from dataclasses import dataclass
 
@@ -13,7 +12,7 @@ if TYPE_CHECKING:
 import psutil
 
 # project
-from truenas_api_conduit import APP_NAME, LOCK_FILE, Endpoints
+from truenas_api_conduit import APP_NAME
 import truenas_api_conduit.core as core
 
 log = logging.getLogger(__name__)
@@ -44,12 +43,12 @@ class RequestHelper:
         return f"RequestHelper(address={self.address}, port={self.port})"
 
     def __call__(
-        self, endpoint: Endpoints, json_dict: dict[str, Any] | None = None
+        self, endpoint: core.Endpoints, json_dict: dict[str, Any] | None = None
     ) -> requests.Response:
         """no json = GET
         pass in json = POST"""
 
-        if endpoint not in Endpoints:
+        if endpoint not in core.Endpoints:
             raise ValueError(f"Invalid endpoint: {endpoint}")
 
         log.info("Making request")
@@ -185,31 +184,11 @@ def send_os_signal(pid: int, sig: int = 0) -> bool:
         return False
 
 
-def read_lockfile() -> dict[str, Any] | None:
-
-    try:
-        with open(LOCK_FILE, "r") as f:
-            lock_dict = json.loads(f.read())
-        int(lock_dict["pid"])
-        str(lock_dict["address"])
-        int(lock_dict["socket_port"])
-        return lock_dict
-    except FileNotFoundError:
-        log.info("Did not find a lock file")
-        return
-    except (json.JSONDecodeError, ValueError, TypeError, KeyError) as e:
-        log.error("Malformed lock file: %s", e)
-        return
-    except Exception as e:
-        log.error("Unexpected error reading lock file: %s", e)
-        return
-
-
 def check_service_status() -> ServerConfig | None:
     "If the service is up, return the port. If not, return None"
 
     # we check if we can pull everything from the lockfile first, its faster.
-    if lock_dict := read_lockfile():
+    if lock_dict := core.read_lockfile():
         log.debug("Found lockfile with PID: %s", lock_dict["pid"])
 
         if proc := get_process_by_pid(lock_dict["pid"]):

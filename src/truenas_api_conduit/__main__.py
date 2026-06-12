@@ -16,8 +16,6 @@ from truenas_api_conduit import (
     APP_NAME,
     SERVICENAME,
     COLORS,
-    Endpoints,
-    InstallType,
 )
 import truenas_api_conduit.core as core
 from truenas_api_conduit.console import console_stderr, console_stdout
@@ -336,7 +334,7 @@ def start(
 
         service = get_service_manager(PLATFORM)
         log.info("Service: %s", service)
-        
+
         # service manager will check if its installed and exit if not
         try:
             service.start(cfg)
@@ -351,8 +349,9 @@ def start(
                     err_string = f"Unexpected error while {action} the service: "
                 err_string += f"\n\n{e} ({e.__class__.__name__})"
                 panel = make_usage_error_panel(err_string, "Service Start Error")
-                console_stderr.print(panel) 
+                console_stderr.print(panel)
                 sys.exit(1)
+
 
 install_help_short = f"""Install the TrueNAS API Conduit service
 ([{COLORS.command}]install --help[default] for more info)"""
@@ -400,24 +399,21 @@ def install(
     service = get_service_manager(core.PLATFORM)
 
     try:
-        if system:
-            service.install(InstallType.SYSTEM)
-        elif package:
-            service.install(InstallType.PACKAGE)
-        else:
-            service.install(InstallType.USER)
+        service.install()
     except Exception as e:
         if cfg.log_level == "trace":
             raise
         else:
             action = "installing"
             if isinstance(e, ServiceError):
-                err_string = f"Encountered a systemd/systemctl error while {action} the service: "
+                err_string = (
+                    f"Encountered a systemd/systemctl error while {action} the service: "
+                )
             else:
                 err_string = f"Unexpected error while {action} the service: "
             err_string += f"\n\n{e} ({e.__class__.__name__})"
             panel = make_usage_error_panel(err_string, "Service Start Error")
-            console_stderr.print(panel) 
+            console_stderr.print(panel)
             sys.exit(1)
 
 
@@ -448,12 +444,14 @@ def uninstall(ctx: click.RichContext) -> None:
         else:
             action = "uninstalling"
             if isinstance(e, ServiceError):
-                err_string = f"Encountered a systemd/systemctl error while {action} the service: "
+                err_string = (
+                    f"Encountered a systemd/systemctl error while {action} the service: "
+                )
             else:
                 err_string = f"Unexpected error while {action} the service: "
             err_string += f"\n\n{e} ({e.__class__.__name__})"
             panel = make_usage_error_panel(err_string, "Service Start Error")
-            console_stderr.print(panel) 
+            console_stderr.print(panel)
             sys.exit(1)
 
 
@@ -638,7 +636,9 @@ def request(
         combined = []
     log.info("Full request params: %s", combined)
 
-    response = request_helper(Endpoints.REQUEST, {"method": method, "params": combined})
+    response = request_helper(
+        core.Endpoints.REQUEST, {"method": method, "params": combined}
+    )
     if ctx.obj.pretty:
         try:
             ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
@@ -671,6 +671,9 @@ def stop(ctx: click.RichContext) -> None:
     # 1) Tell service manager to stop the service
     # 2) Send the service a stop request
 
+    #! LAST THOUGHT: We need these commands with two ways to detect if
+    # the service is running through the OS or if its in standalone mode
+
     # Option 1: Service manager
     service = get_service_manager(core.PLATFORM)
 
@@ -685,12 +688,14 @@ def stop(ctx: click.RichContext) -> None:
         else:
             action = "stopping"
             if isinstance(e, ServiceError):
-                err_string = f"Encountered a systemd/systemctl error while {action} the service: "
+                err_string = (
+                    f"Encountered a systemd/systemctl error while {action} the service: "
+                )
             else:
                 err_string = f"Unexpected error while {action} the service: "
             err_string += f"\n\n{e} ({e.__class__.__name__})"
             panel = make_usage_error_panel(err_string, "Service Start Error")
-            console_stderr.print(panel) 
+            console_stderr.print(panel)
             sys.exit(1)
 
     # Option 2: Sending a request
@@ -702,7 +707,7 @@ def stop(ctx: click.RichContext) -> None:
         )
         sys.exit(1)
 
-    response = request_helper(Endpoints.STOP, {})  # needs empty dict to POST
+    response = request_helper(core.Endpoints.STOP, {})  # needs empty dict to POST
     if ctx.obj.pretty:
         try:
             ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
@@ -737,6 +742,7 @@ def restart(ctx: click.RichContext) -> None:
 
     # Option 1: Service manager
     from truenas_api_conduit.service import get_service_manager
+
     service = get_service_manager(core.PLATFORM)
 
     try:
@@ -750,12 +756,14 @@ def restart(ctx: click.RichContext) -> None:
         else:
             action = "restarting"
             if isinstance(e, ServiceError):
-                err_string = f"Encountered a systemd/systemctl error while {action} the service: "
+                err_string = (
+                    f"Encountered a systemd/systemctl error while {action} the service: "
+                )
             else:
                 err_string = f"Unexpected error while {action} the service: "
             err_string += f"\n\n{e} ({e.__class__.__name__})"
             panel = make_usage_error_panel(err_string, "Service Start Error")
-            console_stderr.print(panel) 
+            console_stderr.print(panel)
             sys.exit(1)
 
     # Option 2: Sending a request
@@ -767,7 +775,7 @@ def restart(ctx: click.RichContext) -> None:
         )
         sys.exit(1)
 
-    response = request_helper(Endpoints.RESTART, {})
+    response = request_helper(core.Endpoints.RESTART, {})
     if ctx.obj.pretty:
         try:
             ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
@@ -802,6 +810,7 @@ def status(ctx: click.RichContext) -> None:
 
     # Option 1: Service manager
     from truenas_api_conduit.service import get_service_manager
+
     service = get_service_manager(core.PLATFORM)
 
     try:
@@ -815,12 +824,14 @@ def status(ctx: click.RichContext) -> None:
         else:
             action = "checking status of"
             if isinstance(e, ServiceError):
-                err_string = f"Encountered a systemd/systemctl error while {action} the service: "
+                err_string = (
+                    f"Encountered a systemd/systemctl error while {action} the service: "
+                )
             else:
                 err_string = f"Unexpected error while {action} the service: "
             err_string += f"\n\n{e} ({e.__class__.__name__})"
             panel = make_usage_error_panel(err_string, "Service Start Error")
-            console_stderr.print(panel) 
+            console_stderr.print(panel)
             sys.exit(1)
 
     # Option 2: Sending a request
@@ -832,7 +843,7 @@ def status(ctx: click.RichContext) -> None:
         )
         sys.exit(1)
 
-    response = request_helper(Endpoints.STATUS)
+    response = request_helper(core.Endpoints.STATUS)
     if ctx.obj.pretty:
         try:
             ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
