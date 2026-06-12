@@ -2,11 +2,12 @@ from typing import Final
 import logging
 from dataclasses import dataclass
 from rich.logging import RichHandler
-from truenas_api_conduit.console import console_stderr
-from truenas_api_conduit.constants import APP_NAME
+from truenas_api_conduit.console import console_stderr, console_stdout
+
+# from truenas_api_conduit import APP_NAME # cant import this here, circular import
 
 TRACE: Final[int] = 5
-PACKAGE_NAME: Final[str] = APP_NAME.replace("-", "_")
+PACKAGE_NAME: Final[str] = "truenas_api_conduit"
 STARTING_LEVEL: Final[int] = logging.WARNING
 
 
@@ -40,10 +41,11 @@ class PackageNameFormatter(logging.Formatter):
 def make_rich_handler(
     show_time: bool = False,
     show_path: bool = False,
+    stdout: bool = True,
 ) -> RichHandler:
 
     return RichHandler(
-        console=console_stderr,
+        console=console_stdout if stdout else console_stderr,
         markup=True,
         show_time=show_time,
         show_path=show_path,
@@ -61,7 +63,7 @@ class HandlersStorage:
 _handlers_storage: HandlersStorage | None = None
 
 
-def init_logging():
+def init_logging(service: bool = False):
 
     logging.addLevelName(TRACE, "TRACE")
     logging.setLoggerClass(TraceLogger)
@@ -69,15 +71,19 @@ def init_logging():
     formatter = logging.Formatter("%(message)s", datefmt="[%X]")
     libformatter = PackageNameFormatter()
 
-    rich_handler_normal = make_rich_handler(show_time=False, show_path=False)
+    rich_handler_normal = make_rich_handler(
+        show_time=False, show_path=False, stdout=service
+    )
     rich_handler_normal.addFilter(AppFilter())
     rich_handler_normal.setFormatter(formatter)
 
-    rich_handler_debug = make_rich_handler(show_time=True, show_path=True)
+    rich_handler_debug = make_rich_handler(show_time=True, show_path=True, stdout=service)
     rich_handler_debug.addFilter(AppFilter())
     rich_handler_debug.setFormatter(formatter)
 
-    rich_handler_libraries = make_rich_handler(show_time=True, show_path=True)
+    rich_handler_libraries = make_rich_handler(
+        show_time=True, show_path=True, stdout=service
+    )
     rich_handler_libraries.addFilter(LibraryFilter())
     rich_handler_libraries.setFormatter(libformatter)
 
@@ -112,6 +118,7 @@ def set_log_level(level: int) -> None:
 
 
 def enable_timestamps() -> None:
+    "used by the service to enable timestamps if on info or higher"
 
     if _handlers_storage is None:
         raise RuntimeError("Logging not initialized")
@@ -119,7 +126,7 @@ def enable_timestamps() -> None:
     if not logging.getLogger().level >= 20:
         raise RuntimeError("Can only toggle timestamps when set to info or higher")
 
-    normal_with_time = make_rich_handler(show_time=True, show_path=False)
+    normal_with_time = make_rich_handler(show_time=True, show_path=False, stdout=True)
     normal_with_time.addFilter(AppFilter())
     formatter = logging.Formatter("%(message)s", datefmt="[%X]")
     normal_with_time.setFormatter(formatter)

@@ -1,4 +1,3 @@
-
 import asyncio
 
 
@@ -15,10 +14,9 @@ class MessageReceiver:
 
     def __await__(self):
         return self.event.wait().__await__()
-        
+
     def drain(self) -> list[str]:
         msgs = self.messages.copy()
         self.event.clear()
         self.messages.clear()
         return msgs
-

@@ -16,7 +16,7 @@ from rich.panel import Panel
 
 # project
 from truenas_api_conduit import log_setup
-from truenas_api_conduit.constants import COLORS
+from truenas_api_conduit import COLORS
 import truenas_api_conduit.core as core
 from truenas_api_conduit.console import console_stderr, set_no_color
 

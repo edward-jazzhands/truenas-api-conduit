@@ -11,8 +11,14 @@ import rich_click as click
 from click_didyoumean import DYMMixin
 
 # project
-from truenas_api_conduit import __version__, APP_NAME
-from truenas_api_conduit.constants import COLORS
+from truenas_api_conduit import (
+    __version__,
+    APP_NAME,
+    SERVICENAME,
+    COLORS,
+    Endpoints,
+    InstallType,
+)
 import truenas_api_conduit.core as core
 from truenas_api_conduit.console import console_stderr, console_stdout
 from truenas_api_conduit.cli_helpers import (
@@ -37,7 +43,7 @@ click.rich_click.THEME = "cargo-modern"
 
 
 def handle_exit(*_):
-    console_stderr.print("\nShutting down.")
+    console_stderr.print("\nCancelling.")
     sys.exit(0)
 
 
@@ -148,7 +154,7 @@ verbose_help = f"""Sets the verbosity/logging level.
 [env:[{COLORS.envvar}] TRUENAS_LOG_LEVEL[default]=]"""
 
 no_color_help = f"""Disables color output. You must set the environment variable
-to fully disable color including the help menu [env:[{COLORS.envvar}] NO_COLOR[default]=]"""
+to disable color in the help menu [env:[{COLORS.envvar}] NO_COLOR[default]=]"""
 
 
 # NOTE: When using click.group() as the main command, it will automatically show
@@ -281,48 +287,70 @@ def start(
         log.info("Starting service in foreground")
 
         cfg_dump = cfg.model_dump_json(context={"unmask": True})
-        dname = APP_NAME + "d"  # ex: my-appd
 
-        # file descriptors are just indices into the process's open file table,
-        # the kernel tracks the actual file/pipe/socket, and hands you back a small
-        # integer as a handle to refer to it. os.pipe gives you two of those indices.
-        # Windows has its own handle system but python's os.pipe, os.dup2, and
-        # os.write abstract over that
+        try:
+            # file descriptors are just indices into the process's open file table,
+            # the kernel tracks the actual file/pipe/socket, and hands you back a small
+            # integer as a handle to refer to it. os.pipe gives you two of those indices.
+            # Windows has its own handle system but python's os.pipe, os.dup2, and
+            # os.write abstract over that
 
-        # os.pipe creates two connected file descriptors, anything written to
-        # write_fd can be read from read_fd.
-        read_fd, write_fd = os.pipe()
+            # os.pipe creates two connected file descriptors, anything written to
+            # write_fd can be read from read_fd.
+            read_fd, write_fd = os.pipe()
 
-        # os.write takes a file descriptor and data. We dump into the pipe buffer,
-        # then close the write end. Since the pipe buffer is in kernel space and
-        # the write end is now closed, the read end will see EOF once the data
-        # is consumed (no hanging)
-        os.write(write_fd, cfg_dump.encode())
-        os.close(write_fd)
+            # os.write takes a file descriptor and data. We dump into the pipe buffer,
+            # then close the write end. Since the pipe buffer is in kernel space and
+            # the write end is now closed, the read end will see EOF once the data
+            # is consumed (no hanging)
+            os.write(write_fd, cfg_dump.encode())
+            os.close(write_fd)
 
-        # os.dup2 takes two file descriptors and copies the first to the second.
-        # We're copying our read_fd onto fd 0 (stdin is fd 0), so that when the
-        # program launches, it will see our read_fd as stdin.
-        os.dup2(read_fd, 0)
+            # os.dup2 takes two file descriptors and copies the first to the second.
+            # We're copying our read_fd onto fd 0 (stdin is fd 0), so that when the
+            # program launches, it will see our read_fd as stdin.
+            os.dup2(read_fd, 0)
 
-        # os.close(read_fd) cleans up the now-redundant original read_fd, fd 0
-        # already holds the pipe, so you don't need two references to it.
-        os.close(read_fd)
+            # os.close(read_fd) cleans up the now-redundant original read_fd, fd 0
+            # already holds the pipe, so you don't need two references to it.
+            os.close(read_fd)
 
-        # * This shall henceforth be known as The execvp stdin Chad Swap
+            # * This shall henceforth be known as The execvp stdin Chad Swap
 
-        # The new program inherits all open file descriptors, including fd 0,
-        # which it now sees as normal stdin
-        os.execvp(dname, [dname])
+            # The new program inherits all open file descriptors, including fd 0,
+            # which it now sees as normal stdin
+            os.execvp(SERVICENAME, [SERVICENAME])
+        except OSError as e:
+            err_string = core.examine_os_error(e)
+            if cfg.log_level == "trace":
+                raise
+            elif cfg.log_level == "debug":
+                log.exception("Error restarting service: %s", err_string)
+            else:
+                log.error("Error restarting service: %s", err_string)
 
     else:
         log.info("Telling OS to start the service")
-        # from truenas_api_conduit.service import get_service_manager
-        # from truenas_api_conduit.core import PLATFORM
-        # service = get_service_manager(PLATFORM)
+        from truenas_api_conduit.service import get_service_manager
+        from truenas_api_conduit.core import PLATFORM
 
-        # service.start(cfg)
-
+        service = get_service_manager(PLATFORM)
+        log.info("Service: %s", service)
+        
+        # service manager will check if its installed and exit if not
+        try:
+            service.start(cfg)
+        except Exception as e:
+            if ctx.obj.verbose >= 3:
+                raise
+            else:
+                err_string = (
+                    "Unexpected error while starting the service: "
+                    f"\n\n{e}"
+                )
+                panel = make_usage_error_panel(err_string, "Service Start Error")
+                console_stderr.print(panel) 
+                sys.exit(1)
 
 install_help_short = f"""Install the TrueNAS API Conduit service
 ([{COLORS.command}]install --help[default] for more info)"""
@@ -351,19 +379,48 @@ def install(
     if system and package:
         raise click.UsageError("You cannot specify both --system and --package")
 
+    if package:
+        # TODO: need some validation to ensure this is actually being done by
+        # the package manager. Might not even use this function, not sure yet.
+        pass
+
     logging_setup(ctx)
     assert ctx.console is not None
+    assert isinstance(ctx.obj, CLIOptions)
+
+    if not click.confirm(
+        f"This will install the {APP_NAME} service. Continue?", default=True
+    ):
+        console_stderr.print("Cancelled")
+        sys.exit(1)
 
     from truenas_api_conduit.service import get_service_manager
-
     service = get_service_manager(core.PLATFORM)
 
-    if system:
-        service.install(core.InstallType.SYSTEM)
-    elif package:
-        service.install(core.InstallType.PACKAGE)
-    else:
-        service.install(core.InstallType.USER)
+    try:
+        if system:
+            service.install(InstallType.SYSTEM)
+        elif package:
+            service.install(InstallType.PACKAGE)
+        else:
+            service.install(InstallType.USER)
+    except Exception as e:
+
+        #! TODO: Using verbose in the CLI here will not respect the log
+        # level if the user has set it as an env var or in the config file.
+        # The config file probably can't be helped because it needs pydantic
+        # and that adds startup time to everything. But some things like installing
+        # definitely can load pydantic, startup time is not an issue here.
+        if ctx.obj.verbose >= 3:
+            raise
+        else:
+            err_string = (
+                "Unexpected error while installing the service: "
+                f"\n\n{e} ({e.__class__.__name__})"
+            )
+            panel = make_usage_error_panel(err_string, "Installation Error")
+            console_stderr.print(panel) 
+            sys.exit(1)
 
 
 @cli.command()
@@ -374,6 +431,30 @@ def uninstall(ctx: click.RichContext) -> None:
 
     logging_setup(ctx)
     assert ctx.console is not None
+    assert isinstance(ctx.obj, CLIOptions)
+
+    if not click.confirm(
+        f"This will uninstall the {APP_NAME} service. Continue?", default=True
+    ):
+        console_stderr.print("Cancelled")
+        sys.exit(1)
+
+    from truenas_api_conduit.service import get_service_manager
+    service = get_service_manager(core.PLATFORM)
+
+    try:
+        service.uninstall()
+    except Exception as e:
+        if ctx.obj.verbose >= 3:
+            raise
+        else:
+            err_string = (
+                "Unexpected error while uninstalling the service: "
+                f"\n\n{e}"
+            )
+            panel = make_usage_error_panel(err_string, "Error Uninstalling")
+            console_stderr.print(panel)
+            sys.exit(1)
 
 
 request_help_short = f"""Make a request using the service. The service must be running
@@ -557,9 +638,7 @@ def request(
         combined = []
     log.info("Full request params: %s", combined)
 
-    response = request_helper(
-        core.Endpoints.REQUEST, {"method": method, "params": combined}
-    )
+    response = request_helper(Endpoints.REQUEST, {"method": method, "params": combined})
     if ctx.obj.pretty:
         try:
             ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
@@ -586,7 +665,30 @@ def stop(ctx: click.RichContext) -> None:
 
     logging_setup(ctx)
     assert ctx.console is not None
+    assert isinstance(ctx.obj, CLIOptions)
 
+    # TWO WAYS TO STOP
+    # 1) Tell service manager to stop the service
+    # 2) Send the service a stop request
+
+    # Option 1: Service manager
+    from truenas_api_conduit.service import get_service_manager
+    service = get_service_manager(core.PLATFORM)
+
+    try:
+        service.uninstall()
+    except Exception as e:
+        if ctx.obj.verbose >= 3:
+            raise
+        else:
+            err_string = (
+                "Unexpected error while uninstalling the service: "
+                f"\n\n{e}"
+            )
+            panel = make_usage_error_panel(err_string, "Error Uninstalling")
+            console_stderr.print(panel) 
+
+    # Option 2: Sending a request
     request_helper = get_request_helper()
     log.debug(request_helper)
     if not request_helper:
@@ -595,7 +697,7 @@ def stop(ctx: click.RichContext) -> None:
         )
         sys.exit(1)
 
-    response = request_helper(core.Endpoints.STOP, {})  # needs empty dict to POST
+    response = request_helper(Endpoints.STOP, {})  # needs empty dict to POST
     if ctx.obj.pretty:
         try:
             ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
@@ -622,7 +724,30 @@ def restart(ctx: click.RichContext) -> None:
 
     logging_setup(ctx)
     assert ctx.console is not None
+    assert isinstance(ctx.obj, CLIOptions)
 
+    # TWO WAYS TO STOP
+    # 1) Tell service manager to stop the service
+    # 2) Send the service a stop request
+
+    # Option 1: Service manager
+    from truenas_api_conduit.service import get_service_manager
+    service = get_service_manager(core.PLATFORM)
+
+    try:
+        service.uninstall()
+    except Exception as e:
+        if ctx.obj.verbose >= 3:
+            raise
+        else:
+            err_string = (
+                "Unexpected error while uninstalling the service: "
+                f"\n\n{e}"
+            )
+            panel = make_usage_error_panel(err_string, "Error Uninstalling")
+            console_stderr.print(panel) 
+
+    # Option 2: Sending a request
     request_helper = get_request_helper()
     log.debug(request_helper)
     if not request_helper:
@@ -631,7 +756,7 @@ def restart(ctx: click.RichContext) -> None:
         )
         sys.exit(1)
 
-    response = request_helper(core.Endpoints.RESTART, {})
+    response = request_helper(Endpoints.RESTART, {})
     if ctx.obj.pretty:
         try:
             ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
@@ -658,7 +783,31 @@ def status(ctx: click.RichContext) -> None:
 
     logging_setup(ctx)
     assert ctx.console is not None
+    assert isinstance(ctx.obj, CLIOptions)
 
+    # TWO WAYS TO GET THE STATUS
+    # 1) Ask the service manager
+    # 2) Send the service a status request
+
+    # Option 1: Service manager
+    from truenas_api_conduit.service import get_service_manager
+    service = get_service_manager(core.PLATFORM)
+
+    try:
+        service.status(stdout=True)
+    except Exception as e:
+        if ctx.obj.verbose >= 3:
+            raise
+        else:
+            err_string = (
+                "Unexpected error while checking the service status: "
+                f"\n\n{e}"
+            )
+            panel = make_usage_error_panel(err_string, "Error Uninstalling")
+            console_stderr.print(panel) 
+            # sys.exit(1) #! we do both checks?
+
+    # Option 2: Sending a request
     request_helper = get_request_helper()
     log.debug(request_helper)
     if not request_helper:
@@ -667,7 +816,7 @@ def status(ctx: click.RichContext) -> None:
         )
         sys.exit(1)
 
-    response = request_helper(core.Endpoints.STATUS)
+    response = request_helper(Endpoints.STATUS)
     if ctx.obj.pretty:
         try:
             ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
@@ -700,12 +849,13 @@ making it possible to start the service through scripts/non-interactive environm
 If this env var is NOT set, the program will prompt you for the encryption key
 when you run the
 [{COLORS.command}]set-key[default] command, as well as every time the service
-starts up! This would be unsuitable for starting at boot or other such automations
+starts up. This would be unsuitable for starting at boot or other such automations
 [env: [{COLORS.envvar}]TRUENAS_CRYPT_KEY[default]=]
 """
 
 delete_help = "Delete the API key from the current keyring backend."
-show_help = "Show the API key in the current keyring backend."
+show_help = """Show the API key in the current keyring backend
+(You can pipe this into a file to save it)."""
 del_crypt_help = "Delete the stored encryption key file, if it exists."
 
 
@@ -737,9 +887,8 @@ def set_key(
     import keyring
     import keyring.errors as kr_errs
     import keyring.backend
-    from truenas_api_conduit.core import CRYPT_KEY_FILE
     from truenas_api_conduit.config.crypt_key import store_crypt_key
-    from truenas_api_conduit.config.keyring_backends import (
+    from truenas_api_conduit.config.file_encrypter import (
         FileEncrypter,
         PasswordGetError,
         GetErrorEnum,
@@ -758,7 +907,7 @@ def set_key(
     current_backend = keyring.get_keyring()
     log.debug(f"Current keyring backend: {current_backend.name}")
 
-    service = "truenas-api-conduit"
+    service = APP_NAME
     username = "api_key"
 
     action_desc = "<action>"
@@ -773,9 +922,9 @@ def set_key(
                 actions.append(action_desc)
             if del_crypt:
                 action_desc = "delete crypt key file"
-                if not CRYPT_KEY_FILE.exists():
+                if not core.CRYPT_KEY_PATH.exists():
                     if delete:
-                        log.error(f"No crypt key file found ({CRYPT_KEY_FILE})")
+                        log.error(f"No crypt key file found ({core.CRYPT_KEY_PATH})")
                     else:
                         ctx.console.print(
                             make_usage_error_panel(
@@ -785,8 +934,8 @@ def set_key(
                 else:
                     log.info("Deleting crypt key file")
                     action_desc = "delete crypt key file"
-                    CRYPT_KEY_FILE.unlink()
-                    log.debug(f"Deleted crypt key file ({CRYPT_KEY_FILE})")
+                    core.CRYPT_KEY_PATH.unlink()
+                    log.debug(f"Deleted crypt key file ({core.CRYPT_KEY_PATH})")
                     actions.append(action_desc)
         elif show:
             log.info("Showing API key from '%s'", current_backend.name)
@@ -858,6 +1007,8 @@ def set_key(
         if actions:
             success_string = ""
             for i, action in enumerate(actions):
+                if action == "show API key":
+                    return
                 success_string += f"Success: {action}"
                 if i < len(actions) - 1:
                     success_string += "\n"
@@ -881,8 +1032,9 @@ def config(ctx: click.RichContext) -> None:
 
     editor = os.environ.get("EDITOR")
     if editor:
-        console_stderr.print("Remember you must restart the service to apply any changes",
-        style="italic")
+        console_stderr.print(
+            "Remember you must restart the service to apply any changes", style="italic"
+        )
         os.execvp(editor, [editor, core.CONFIG_PATH])
     else:
         err_string = (
@@ -1020,19 +1172,6 @@ def version(ctx: click.RichContext) -> None:
     # API its written for.
 
     ctx.console.print(f"{APP_NAME} {__version__}")
-
-
-@cli.command()
-@common_options
-@click.pass_context
-def help(ctx: click.RichContext) -> None:
-    """Alias for the main --help"""
-
-    logging_setup(ctx)
-    assert ctx.console is not None
-
-    assert ctx.parent is not None
-    ctx.console.print(ctx.parent.get_help())
 
 
 @cli.command()

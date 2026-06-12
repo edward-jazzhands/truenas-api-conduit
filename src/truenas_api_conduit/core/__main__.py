@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     # the config is frozen. As such we need to defer importing it until
     # we've had a chance to set that global.
     from truenas_api_conduit.config import Config
-    
+
     # from truenas_api_conduit.core.ws_client import TrueNASClient
 
 # third party
@@ -27,9 +27,7 @@ from truenas_api_conduit.console import console_stderr
 import truenas_api_conduit.log_setup as log_setup
 import truenas_api_conduit.core.endpoints as endpoints
 
-
-
-log_setup.init_logging()
+log_setup.init_logging(service=True)
 log = logging.getLogger(__name__)
 
 
@@ -124,6 +122,7 @@ async def truenas_context_manager(app: web.Application):
             log.info("The TrueNAS websocket client closed itself gracefully")
         else:
             log.warning(close_result.msg)
+
 
 async def main(cfg: Config) -> None:
 

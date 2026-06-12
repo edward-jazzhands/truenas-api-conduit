@@ -17,7 +17,8 @@ from aiohttp import web
 from aiohttp.web_runner import GracefulExit
 
 # project
-from truenas_api_conduit import APP_NAME
+from truenas_api_conduit import APP_NAME, SERVICENAME
+from truenas_api_conduit.core import examine_os_error
 import truenas_api_conduit.log_setup as log_setup
 
 log_setup.init_logging()
@@ -140,19 +141,27 @@ async def restart(request: web.Request) -> web.Response:
         await request.app.cleanup()
 
         cfg_dump = request.app["config"].model_dump_json(context={"unmask": True})
-        dname = APP_NAME + "d"
 
         # The execvp Chad Swap. We dump out the config to stdout then pipe that
         # into a new copy of this process. This is necessary because the user
         # may have started the service using the CLI in standalone mode or otherwise
         # started the service by piping a custom config into it. So we preserve
         # whatever they passed in when restarting.
-        read_fd, write_fd = os.pipe()
-        os.write(write_fd, cfg_dump.encode())
-        os.close(write_fd)
-        os.dup2(read_fd, 0)
-        os.close(read_fd)
-        os.execvp(dname, [dname])
+        try:
+            read_fd, write_fd = os.pipe()
+            os.write(write_fd, cfg_dump.encode())
+            os.close(write_fd)
+            os.dup2(read_fd, 0)
+            os.close(read_fd)
+            os.execvp(SERVICENAME, [SERVICENAME])
+        except OSError as e:
+            err_string = examine_os_error(e)
+            if request.app["config"].log_level == "trace":
+                raise
+            elif request.app["config"].log_level == "debug":
+                log.exception("Error restarting service: %s", err_string)
+            else:
+                log.error("Error restarting service: %s", err_string)
 
-    asyncio.ensure_future(_restart())
+    asyncio.create_task(_restart())
     return web.json_response({"result": "Restarting the conduit service"})

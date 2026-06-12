@@ -9,8 +9,8 @@ from truenas_api_conduit.console import console_stderr
 import click
 
 # project
-from truenas_api_conduit.core import CONFIG_DIR, CRYPT_KEY_FILE, SLASH
-from truenas_api_conduit.constants import COLORS
+from truenas_api_conduit.core import CONFIG_DIR, CRYPT_KEY_PATH, CRYPT_FILE_NAME, SLASH
+from truenas_api_conduit import COLORS
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ log = logging.getLogger(__name__)
 
 def store_crypt_key(v: SecretStr) -> bool | None:
 
-    if CRYPT_KEY_FILE.exists():
+    if CRYPT_KEY_PATH.exists():
         return
 
     console_stderr.print(
@@ -48,25 +48,25 @@ def store_crypt_key(v: SecretStr) -> bool | None:
         f"  1. Setting the environment variable "
         f"\\[env: [{COLORS.envvar}]TRUENAS_CRYPT_KEY[default]=] "
         "(ensure it is set before the service starts)\n"
-        f"  2. Creating a file named [{COLORS.envvar}].crypt[default] "
+        f"  2. Creating a file named [{COLORS.envvar}]{CRYPT_FILE_NAME}[default] "
         "in your config directory containing the encryption key "
         f"(set [{COLORS.command}]chmod 600[default])\n\n"
         f"[default]On your machine, it would look for this file at: "
-        f"{CONFIG_DIR}{SLASH}.crypt\n"
+        f"{CONFIG_DIR}{SLASH}{CRYPT_FILE_NAME}\n"
         "Choosing yes will perform option 2 for you."
     )
-    answer = click.prompt("Enter 'y' to create the .crypt file")
+    answer = click.prompt(f"Enter 'y' to create the {CRYPT_FILE_NAME} file")
     if answer.lower() not in ("y", "yes"):
         return
 
     if isinstance(v, SecretStr):
-        CRYPT_KEY_FILE.write_text(v.get_secret_value())
+        CRYPT_KEY_PATH.write_text(v.get_secret_value())
     elif isinstance(v, str):
-        CRYPT_KEY_FILE.write_text(v)
+        CRYPT_KEY_PATH.write_text(v)
     else:
         assert_never(v)
 
-    CRYPT_KEY_FILE.chmod(0o600)  # HACK: This won't do anything on windows.
+    CRYPT_KEY_PATH.chmod(0o600)  # HACK: This won't do anything on windows.
     console_stderr.print("Success: encryption key written to file")
     return True
 
@@ -78,9 +78,9 @@ def get_crypt_key() -> SecretStr | None:
         crypt_key = SecretStr(crypt_key)
         log.debug("Found TRUENAS_CRYPT_KEY in env: %s", crypt_key)
     else:
-        if CRYPT_KEY_FILE.exists():
+        if CRYPT_KEY_PATH.exists():
             try:
-                crypt_key = SecretStr(CRYPT_KEY_FILE.read_text())
+                crypt_key = SecretStr(CRYPT_KEY_PATH.read_text())
             except Exception as e:
                 log.critical("Could not read crypt key file: %s", e)
                 raise

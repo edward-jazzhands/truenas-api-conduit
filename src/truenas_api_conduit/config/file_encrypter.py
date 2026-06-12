@@ -19,9 +19,9 @@ from pydantic import SecretStr
 
 # project
 from truenas_api_conduit.errors import ConduitError
-from truenas_api_conduit.core import STORAGE_DIR
+from truenas_api_conduit.core import STORAGE_DIR, CRYPT_FILE_NAME
 from truenas_api_conduit.console import console_stderr
-from truenas_api_conduit.constants import COLORS
+from truenas_api_conduit import COLORS
 from truenas_api_conduit.config.crypt_key import get_crypt_key
 
 SECRETS_DIR: Final[Path] = STORAGE_DIR / "secrets"
@@ -74,9 +74,9 @@ class FileEncrypter(KeyringBackend):
             "there is no other keyring backend available. You will be prompted "
             "to enter an encryption key to store and retrieve your API key.\n"
             f"You can also set the [{COLORS.envvar}]TRUENAS_CRYPT_KEY[default] environment "
-            f"variable or create a [{COLORS.envvar}].crypt[default] file to avoid this "
+            f"variable or create a [{COLORS.envvar}]{CRYPT_FILE_NAME}[default] file to avoid this "
             f"prompt. The [{COLORS.command}]set-key[default] command in the CLI will "
-            "offer to create a .crypt file for you"
+            f"offer to create a {CRYPT_FILE_NAME} file for you"
         )
         super().__init__()
 
@@ -118,10 +118,20 @@ class FileEncrypter(KeyringBackend):
             raise PasswordSetError(f"Could not set password in keyring: {e}") from e
 
     def get_password(self, service: str, username: str) -> str | None:
-        try:
-            return self._get_password(service, username)
-        except PasswordGetError as e:
-            self._handle_password_get_error(e, service, username)
+
+        ALLOWED: Final[int] = 3
+        attempts = 0
+        while True:
+            try:
+                if attempts > 0:
+                    console_stderr.print(f"Attempts remaining: {ALLOWED - attempts}")
+                return self._get_password(service, username)
+            except PasswordGetError as e:
+                if e.err_code == GetErrorEnum.INCORRECT_ENCRYPTION_KEY:
+                    attempts += 1
+                    if attempts < ALLOWED:
+                        continue
+                self._handle_password_get_error(e, service, username)
 
     def _get_password(self, service: str, username: str) -> str | None:
 
@@ -230,9 +240,9 @@ class FileEncrypter(KeyringBackend):
             log.debug("No vault file found for: %s.%s", service, username)
             return
         elif e.err_code == GetErrorEnum.INCORRECT_ENCRYPTION_KEY:
-            raise
+            raise e
         elif e.err_code == GetErrorEnum.GENERIC_ERROR:
             # This would indicate a bug in the program
-            raise
+            raise e
         else:
             assert_never(e.err_code)

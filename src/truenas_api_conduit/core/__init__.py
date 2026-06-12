@@ -7,23 +7,24 @@ import sys
 import platformdirs
 
 # project
-from truenas_api_conduit import APP_NAME
+from truenas_api_conduit import APP_NAME, Platform
 from truenas_api_conduit.core.setup_app_dir import ensure_config as _ensure_config
-from truenas_api_conduit.core.setup_app_dir import ensure_storage_dir as _ensure_storage_dir
-from truenas_api_conduit.core.global_enums import Platform, InstallType, Endpoints
+from truenas_api_conduit.core.setup_app_dir import (
+    ensure_storage_dir as _ensure_storage_dir,
+)
 from truenas_api_conduit.core.os_error import examine_os_error
 from truenas_api_conduit.core.msg_receiver import MessageReceiver
 
 __all__ = [
     "ensure_config",
     "Platform",
-    "InstallType",
-    "Endpoints",
     "PLATFORM",
     "CONFIG_DIR",
     "CONFIG_PATH",
     "examine_os_error",
     "MessageReceiver",
+    "CRYPT_KEY_PATH",
+    "CRYPT_FILE_NAME",
 ]
 
 
@@ -59,7 +60,8 @@ CONFIG_DIR: Final[Path] = (
     else Path.home() / APP_NAME
 )
 
-CONFIG_PATH: Final[Path] = CONFIG_DIR / "settings.conf"
+CONFIG_FILE_NAME: Final[str] = "settings.conf"
+CONFIG_PATH: Final[Path] = CONFIG_DIR / CONFIG_FILE_NAME
 
 
 def ensure_config() -> None:
@@ -72,7 +74,8 @@ def ensure_config() -> None:
 # On Linux: ~/.local/share/truenas-api-conduit
 STORAGE_DIR: Final[Path] = Path(platformdirs.user_data_dir(APP_NAME))
 
-CRYPT_KEY_FILE: Final[Path] = CONFIG_DIR / ".crypt"
+CRYPT_FILE_NAME: Final[str] = ".cryptkey"
+CRYPT_KEY_PATH: Final[Path] = CONFIG_DIR / CRYPT_FILE_NAME
 
 
 def ensure_storage_dir() -> None:

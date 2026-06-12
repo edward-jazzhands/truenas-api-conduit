@@ -8,6 +8,7 @@ import logging
 import time
 import socket
 from dataclasses import dataclass
+
 if TYPE_CHECKING:
     from truenas_api_conduit.core.msg_receiver import MessageReceiver
 
@@ -37,6 +38,7 @@ __all__ = [
     "CloseResult",
 ]
 
+
 @dataclass
 class CloseResult:
     # False, "Tried to close, but there's no client task"
@@ -49,11 +51,17 @@ class CloseResult:
 class UnexpectedShutdown(ConduitError):
     pass
 
+
 class TrueNASClient:
     """wrapper around the websocket connection. This is created by the aiohttp web
     server, and shares aiohttp's event loop (must be passed in)"""
 
-    def __init__(self, config: Config, loop: asyncio.AbstractEventLoop, message_receiver: MessageReceiver) -> None:
+    def __init__(
+        self,
+        config: Config,
+        loop: asyncio.AbstractEventLoop,
+        message_receiver: MessageReceiver,
+    ) -> None:
 
         self.config: Config = config
         "pydantic-settings Config object"
@@ -86,7 +94,7 @@ class TrueNASClient:
         self.client_task: asyncio.Task | None = None
         "The asyncio task that runs the client loop"
 
-        self._closing:bool = False
+        self._closing: bool = False
         "Flag set by the close() method to indicate that the client is closing"
 
         self.conn_diag: ConnDiag | None = None
@@ -114,7 +122,7 @@ class TrueNASClient:
 
         # NOTE: This will be called in two scenarios I can think of:
         # 1) If the client lifecycle task finishes for any reason, it will trigger a
-        #    callback which will start the service cleanup 
+        #    callback which will start the service cleanup
         # 2) If the server receives a stop command or a kill signal, it will set
         #    the shutdown_event and trigger the service cleanup
 
@@ -135,7 +143,7 @@ class TrueNASClient:
         # task, which will be raised by asyncio at the very next thing in
         # the task that tries to await something (its asyncio magic, dont ask
         # too many questions, you just have to believe)
-        if not self.client_task.cancelling():  # returns 0 (falsy) if not cancelling 
+        if not self.client_task.cancelling():  # returns 0 (falsy) if not cancelling
             self.client_task.cancel()
 
         # Now, we can safely close the websocket connection without affecting
@@ -152,7 +160,7 @@ class TrueNASClient:
                 log.error("Error closing the websocket connection: %s", e)
 
         # Last we have to await the task to block here until it finishes.
-        # This is necessary to give the CancelledError we just triggered the time 
+        # This is necessary to give the CancelledError we just triggered the time
         # it needs to bubble up through the program and allow the client to gracefully
         # close itself. This way, aiohttp can stay open until the TrueNAS client is
         # completely closed and then send a nice message that says "the client has
@@ -161,15 +169,18 @@ class TrueNASClient:
         try:
             await asyncio.wait_for(self.client_task, timeout=SHUTDOWN_TIMEOUT)
         except asyncio.CancelledError:
-            log.debug("Caught a cancelled error while waiting for the client task to close")
+            log.debug(
+                "Caught a cancelled error while waiting for the client task to close"
+            )
         except Exception as e:
             # If we encountered an error waiting for the client to clean itself up,
             # something is borked and the caller needs to force an exit
             log.error("Unexpected error closing the client task: %s", e)
-            return CloseResult(False, f"Error while closing the internal TrueNAS client: {e}")
+            return CloseResult(
+                False, f"Error while closing the internal TrueNAS client: {e}"
+            )
 
         return CloseResult(True, "Client closed successfully")
-
 
     async def status(self) -> dict[str, Any]:
 
@@ -184,7 +195,9 @@ class TrueNASClient:
         # RIGHT NOW. We don't wait. We return what it says right now.
         if connected := self.is_connected.is_set():
             start_time = time.time()
-            response = await self.call({"method": "core.ping", "params": []}) # handles the timeout
+            response = await self.call(
+                {"method": "core.ping", "params": []}
+            )  # handles the timeout
             if response["result"] in ("FAILED", "TIMEOUT"):
                 ping = f"Timed out after {REQUEST_WAIT_TIME} seconds"
             else:
@@ -242,9 +255,7 @@ class TrueNASClient:
         # but the bug finders keep going off if this is not done with a lock.
         # And there definitely should not be any need for a timeout here.
         async with self.req_id_lock:
-            rpc_payload = self._make_rpc_request(
-                payload["method"], payload["params"]
-            )
+            rpc_payload = self._make_rpc_request(payload["method"], payload["params"])
 
         future: asyncio.Future[dict[str, Any]] = self.loop.create_future()
         self.pending[rpc_payload["id"]] = future
@@ -276,10 +287,9 @@ class TrueNASClient:
                 log.error(msg)
                 return {"result": "TIMEOUT", "error": msg}
 
-
     # PUBLIC API ABOVE THIS LINE
     # *-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+
-    # INTERNAL METHODS BELOW 
+    # INTERNAL METHODS BELOW
 
     # used in _connect and call()
     def _make_rpc_request(
@@ -377,13 +387,13 @@ class TrueNASClient:
                 await self._connect()
             # UNRECOVERABLES:
             except (
-                asyncio.CancelledError, #  Injected when the asyncio task is cancelled
+                asyncio.CancelledError,  #  Injected when the asyncio task is cancelled
                 UnexpectedShutdown,  #   Our custom exception, signals unrecoverable error
                 json.JSONDecodeError,  #   ! is this one recoverable?
                 ValueError,  #   TODO: should be used to indicate wrong API key?
                 ssl.SSLError,  #   NOTE: The only reason we'd catch one of the rest here
                 ws_exceptions.InvalidURI,  # is if we're in trace mode
-                socket.gaierror,   #   trace just raises all exceptions
+                socket.gaierror,  #   trace just raises all exceptions
             ):
                 raise
             # RECOVERABLES (everything else):

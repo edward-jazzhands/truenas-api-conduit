@@ -21,10 +21,10 @@ from pydantic_settings import (
 )
 
 # project
-from truenas_api_conduit import log_setup
+from truenas_api_conduit import log_setup, APP_NAME
 from truenas_api_conduit.console import set_no_color
 from truenas_api_conduit.core import CONFIG_PATH
-from truenas_api_conduit.config.pydantic_sources import (
+from truenas_api_conduit.config.keyring_source import (
     KeyringSettingsSource,
     KeyringField,
 )
@@ -121,7 +121,7 @@ class Config(BaseSettings):
             log.debug("Found API key in init kwargs. Skipping keyring")
             skip = True
         else:
-            from truenas_api_conduit.config.keyring_backends import FileEncrypter
+            from truenas_api_conduit.config.file_encrypter import FileEncrypter
 
             # my custom fallback file encrypter keyring backend. This is set to
             # lowest priority (0.0) so that it should only be used if no other
@@ -136,7 +136,7 @@ class Config(BaseSettings):
         # 5. Config class defaults
         return (
             TrackingInitSource(settings_cls, init_settings.init_kwargs),
-            TrackingKeyringSource(settings_cls, service="truenas-api-conduit", skip=skip),
+            TrackingKeyringSource(settings_cls, service=APP_NAME, skip=skip),
             TrackingEnvSource(settings_cls),
             TrackingTomlSource(settings_cls),
         )

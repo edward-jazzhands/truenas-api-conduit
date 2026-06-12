@@ -4,17 +4,18 @@ from abc import ABC, abstractmethod
 if TYPE_CHECKING:
     from truenas_api_conduit.config.user_config import Config
 
-from truenas_api_conduit.core import Platform, InstallType
+from truenas_api_conduit import InstallType
+from truenas_api_conduit.core import Platform
 
 
 class BaseService(ABC):
 
     @abstractmethod
-    def install(self, install_type: InstallType):
+    def install(self, install_type: InstallType) -> None:
         pass
 
     @abstractmethod
-    def uninstall(self):
+    def uninstall(self) -> None:
         pass
 
     @abstractmethod
@@ -22,19 +23,17 @@ class BaseService(ABC):
         pass
 
     @abstractmethod
-    def stop(self):
+    def stop(self) -> None:
         pass
 
     @abstractmethod
-    def restart(self):
+    def restart(self) -> None:
         pass
 
     @abstractmethod
-    def status(self):
-        pass
-
-    @abstractmethod
-    def __call__(self):
+    def status(self, stdout: bool = True) -> int:
+        """should return the exit code of the service status command after
+        printing it to stdout."""
         pass
 
 
