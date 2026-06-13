@@ -8,7 +8,7 @@ import signal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    # This module will look at the is_config_frozen global to determine if
+    # This module will look at app_globals.is_config_frozen to determine if
     # the config is frozen. As such we need to defer importing it until
     # we've had a chance to set that global.
     from truenas_api_conduit.config import Config
@@ -23,7 +23,7 @@ from aiohttp.web_runner import GracefulExit
 # project
 from truenas_api_conduit import LOCK_FILE
 import truenas_api_conduit.core as core
-from truenas_api_conduit.app_globals import app_env, set_app_env
+from truenas_api_conduit.app_globals import app_globals
 from truenas_api_conduit.console import console_stderr
 import truenas_api_conduit.log_setup as log_setup
 import truenas_api_conduit.core.endpoints as endpoints
@@ -36,14 +36,15 @@ def create_lockfile(cfg: Config):
 
     if os.path.exists(LOCK_FILE):
         log.warning("Lockfile was not properly cleaned up after last run")
+    log.debug("Creating lockfile")
 
-    assert app_env is not None, "Tried running app with no app_env set"
+    assert app_globals.app_env is not None, "Tried running app with no app_env set"
     cfg_dict = {
         "pid": os.getpid(),
         "address": cfg.service_address,
         "socket_port": cfg.socket_port,
         "header": cfg.request_header,
-        "app_env": str(app_env.value),
+        "app_env": str(app_globals.app_env.value),
     }
 
     with open(LOCK_FILE, "w") as f:
@@ -53,18 +54,6 @@ def create_lockfile(cfg: Config):
     # just for this purpose. So windows users just get slightly shittier security.
     # Thats the way she goes bubs.
     LOCK_FILE.chmod(0o600)  # HACK: This won't do anything on windows.
-
-
-async def watch_messages(receiver: core.MessageReceiver) -> None:
-    # This watches the message reciever for messages from the
-    # TrueNASClient.
-
-    while True:
-        # Suspends until __call__ sets the event.
-        await receiver
-        messages = receiver.drain()
-        for message in messages:
-            print(message)
 
 
 async def truenas_context_manager(app: web.Application):
@@ -87,10 +76,7 @@ async def truenas_context_manager(app: web.Application):
     log.info("Starting TrueNAS API websocket client")
     loop = asyncio.get_running_loop()
 
-    receiver = core.MessageReceiver()
-    loop.create_task(watch_messages(receiver))
-
-    client = TrueNASClient(cfg, loop, receiver)
+    client = TrueNASClient(cfg, loop)
     app["truenas_client"] = client
     create_lockfile(cfg)
 
@@ -117,7 +103,8 @@ async def truenas_context_manager(app: web.Application):
         # TEARDOWN - this is equivalent to aiohttp's on_cleanup hook
 
         log.info("Running service teardown")
-        LOCK_FILE.unlink(missing_ok=True)
+        if result := core.delete_lockfile():
+            log.error("Failed to delete stale lockfile: %s", result)
 
         close_result = await client.close()
         log.debug(close_result)
@@ -133,7 +120,6 @@ async def main(cfg: Config) -> None:
 
     app = web.Application()
     app["config"] = cfg
-    app["message_receiver"] = core.MessageReceiver()
 
     shutdown_event = asyncio.Event()
     app["shutdown_event"] = shutdown_event
@@ -179,10 +165,7 @@ async def main(cfg: Config) -> None:
 
 def error_handler(err_string: str, log_level: str, e: BaseException):
 
-    if log_level.lower() == "debug":
-        log.exception(err_string)
-        sys.exit(1)
-    elif log_level.lower() == "trace":
+    if log_level.lower() == "trace":
         log.error(err_string)
         raise e
     else:
@@ -197,9 +180,7 @@ def start():
     # But once it comes time to run the program, I freeze the config.
     # This is basically just security hygiene, makes it harder for a
     # hypothetical hacker to modify the config while the service is running.
-    from truenas_api_conduit.app_globals import set_config_frozen
-
-    set_config_frozen()
+    app_globals.set_config_frozen()
 
     nc_env = os.environ.get("NO_COLOR")
     if nc_env is not None:
@@ -240,26 +221,36 @@ def start():
     log.debug("Config: %s", cfg)
     log.debug("Config provenance: %s", cfg.provenance)
 
-    if local_app_env := os.environ.get("TRUENAS_APP_ENV"):
+    if app_env_str := os.environ.get("TRUENAS_APP_ENV"):
         try:
-            local_app_env = core.AppEnv(local_app_env)
+            appenv_enum = core.AppEnv(app_env_str)
         except ValueError:
             if log_level <= level_mapping["TRACE"]:
                 raise
             else:
                 log.error(
                     "TRUENAS_APP_ENV Environment variable is not valid: %s",
-                    local_app_env,
+                    app_env_str,
                 )
                 sys.exit(1)
+        else:
+            log.info("Detected TRUENAS_APP_ENV: %s", appenv_enum.value)
     else:
+        # If the env var is not set it probably means the user ran the
+        # truenas-api-conduit entrypoint directly.
+        # *local_app_env = core.AppEnv.STANDALONE
+        
         if log_level <= level_mapping["TRACE"]:
             raise ValueError("TRUENAS_APP_ENV environment variable is not set")
         else:
             log.error("TRUENAS_APP_ENV environment variable is not set")
             sys.exit(1)
 
-    set_app_env(local_app_env)
+    log.debug("Setting app env to: %s", appenv_enum)
+    app_globals.set_app_env(appenv_enum)
+    log.debug("App env set to: %s", app_globals.app_env)
+    if app_globals.app_env is None:
+        raise ValueError("Tried running app with no app_env set")
 
     try:
         asyncio.run(main(cfg), debug=(level_name.lower() == "trace"))

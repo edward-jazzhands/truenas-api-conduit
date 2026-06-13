@@ -8,13 +8,12 @@ from enum import Enum, StrEnum
 import platformdirs
 
 # project
-from truenas_api_conduit import APP_NAME
+from truenas_api_conduit import APP_NAME, LOCK_FILE
 from truenas_api_conduit.core.setup_app_dir import ensure_config as _ensure_config
 from truenas_api_conduit.core.setup_app_dir import (
     ensure_storage_dir as _ensure_storage_dir,
 )
 from truenas_api_conduit.core.os_error import examine_os_error
-from truenas_api_conduit.core.msg_receiver import MessageReceiver
 from truenas_api_conduit.core.read_lockfile import read_lockfile
 
 __all__ = [
@@ -26,7 +25,6 @@ __all__ = [
     "CONFIG_DIR",
     "CONFIG_PATH",
     "examine_os_error",
-    "MessageReceiver",
     "read_lockfile",
     "CRYPT_KEY_PATH",
     "CRYPT_FILE_NAME",
@@ -107,3 +105,13 @@ CRYPT_KEY_PATH: Final[Path] = CONFIG_DIR / CRYPT_FILE_NAME
 
 def ensure_storage_dir() -> None:
     _ensure_storage_dir(STORAGE_DIR)
+
+
+def delete_lockfile() -> str | None:
+    "success: None, failure: error string"
+    try:
+        LOCK_FILE.unlink(missing_ok=True)
+    except OSError as e:
+        return examine_os_error(e)
+    return None
+        

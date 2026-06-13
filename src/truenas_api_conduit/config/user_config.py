@@ -28,7 +28,7 @@ from truenas_api_conduit.config.keyring_source import (
     KeyringSettingsSource,
     KeyringField,
 )
-from truenas_api_conduit.app_globals import is_config_frozen
+from truenas_api_conduit.app_globals import app_globals
 
 __all__ = ["Config"]
 
@@ -95,7 +95,7 @@ class Config(BaseSettings):
         toml_file=CONFIG_PATH,
         env_file_encoding="utf-8",
         env_prefix="TRUENAS_",
-        frozen=is_config_frozen,
+        frozen=app_globals.is_config_frozen,
         validate_by_name=True,  # <- This is the new and recommended way
         validate_by_alias=True,
         # populate_by_name=True, # ! Deprecated - Not recommended in v2.11+

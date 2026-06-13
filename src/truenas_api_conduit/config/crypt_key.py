@@ -59,13 +59,7 @@ def store_crypt_key(v: SecretStr) -> bool | None:
     if answer.lower() not in ("y", "yes"):
         return
 
-    if isinstance(v, SecretStr):
-        CRYPT_KEY_PATH.write_text(v.get_secret_value())
-    elif isinstance(v, str):
-        CRYPT_KEY_PATH.write_text(v)
-    else:
-        assert_never(v)
-
+    CRYPT_KEY_PATH.write_text(v.get_secret_value())
     CRYPT_KEY_PATH.chmod(0o600)  # HACK: This won't do anything on windows.
     console_stderr.print("Success: encryption key written to file")
     return True

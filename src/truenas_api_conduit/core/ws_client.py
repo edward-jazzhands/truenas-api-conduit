@@ -1,6 +1,6 @@
 # standard library
 import asyncio
-from typing import Any, Final, TYPE_CHECKING
+from typing import Any, Final
 import json
 import ssl
 from pathlib import Path
@@ -9,27 +9,24 @@ import time
 import socket
 from dataclasses import dataclass
 
-if TYPE_CHECKING:
-    from truenas_api_conduit.core.msg_receiver import MessageReceiver
-
 # third party
 import websockets.client as client
 import websockets.exceptions as ws_exceptions
 
 # project
 from truenas_api_conduit import APP_NAME
-from truenas_api_conduit.app_globals import app_env
+from truenas_api_conduit.app_globals import app_globals
 from truenas_api_conduit.core import examine_os_error
 from truenas_api_conduit.errors import ConduitError
 from truenas_api_conduit.config import Config
 from truenas_api_conduit.core.conn_diag import ConnDiag, run_connection_diagnostic
 
-OPEN_TIMEOUT: Final[int] = 5  #         when creating the websocket client
-REQUEST_WAIT_TIME: Final[int] = 10  #   how long to wait for response in a call
-HEARTBEAT: Final[int] = 30  #           from client to TrueNAS
-PING_TIMEOUT: Final[int] = 10  #        how long to wait if a heartbeat fails
+OPEN_TIMEOUT:       Final[int] = 5  #   when creating the websocket client
+REQUEST_WAIT_TIME:  Final[int] = 10  #  how long to wait for response in a call
+HEARTBEAT:          Final[int] = 30  #  from client to TrueNAS
+PING_TIMEOUT:       Final[int] = 10  #  how long to wait if a heartbeat fails
 MAX_RECONNECT_WAIT: Final[int] = 60  #  max wait between reconnections if connection drops
-SHUTDOWN_TIMEOUT: Final[int] = 5  #     how long to wait for the client task to finish
+SHUTDOWN_TIMEOUT:   Final[int] = 5  #   ow long to wait for the client task to finish
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +58,6 @@ class TrueNASClient:
         self,
         config: Config,
         loop: asyncio.AbstractEventLoop,
-        message_receiver: MessageReceiver,
     ) -> None:
 
         self.config: Config = config
@@ -69,9 +65,6 @@ class TrueNASClient:
 
         self.loop: asyncio.AbstractEventLoop = loop
         "the asyncio event loop"
-
-        self.message_receiver: MessageReceiver = message_receiver
-        "Callable class to send messages from this client to the aiohttp server"
 
         self.ws_conn: client.WebSocketClientProtocol | None = None
         "Websocket connection client"
@@ -208,6 +201,10 @@ class TrueNASClient:
             ping = "Not connected"
             log.warning("Request received but client is not connected")
 
+        app_env = app_globals.app_env
+        if app_env is not None:
+            app_env = app_env.value
+
         return {
             "client-status": client_status,
             "connected": connected,
@@ -281,7 +278,7 @@ class TrueNASClient:
             return await asyncio.wait_for(future, timeout=REQUEST_WAIT_TIME)
         except TimeoutError as e:
             # Clean up the pending dict so it doesn't leak
-            self.pending.pop(payload["id"], None)
+            self.pending.pop(rpc_payload["id"], None)
             msg = "Timed out waiting for a response from the TrueNAS server."
             if self.config.log_level == "trace":
                 raise TimeoutError(msg) from e
@@ -466,9 +463,6 @@ class TrueNASClient:
         if self.config.log_level == "trace":
             log.error(err_string)
             raise  # trace just lets it bubble up directly
-        elif self.config.log_level == "debug":
-            log.error(err_string, exc_info=e)
-            raise UnexpectedShutdown(err_string) from e
         else:
             log.error(err_string)
             raise UnexpectedShutdown(err_string) from e
@@ -581,18 +575,21 @@ class TrueNASClient:
                     data = json.loads(msg)
                 except json.JSONDecodeError as e:
                     log.error("Malformed response, skipping: %s", e)
+                    log.debug("The malformed response: %s", msg)
                     continue
 
                 try:
                     req_id = data["id"]  #    match response ID to request ID
                 except KeyError:
-                    log.error("Response has no ID, skipping")
+                    # I have yet to see this happen but its possible
+                    log.info("Got response from TrueNAS without an ID: %s", data)
                     continue
 
                 try:
                     future = self.pending.pop(req_id)
                 except KeyError:
                     log.warning(f"No pending future for request ID {req_id}, skipping")
+                    log.debug("The response without a pending future: %s", data)
                     continue
 
                 log.info("Request #%s was successful", req_id)

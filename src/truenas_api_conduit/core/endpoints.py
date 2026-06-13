@@ -3,8 +3,10 @@ import json
 import os
 import logging
 import asyncio
+import sys
 from enum import Enum
 from typing import TYPE_CHECKING
+
 
 if TYPE_CHECKING:
     # ws_client contains the import for the websockets library so we gain
@@ -147,6 +149,8 @@ async def restart(request: web.Request) -> web.Response:
         # may have started the service using the CLI in standalone mode or otherwise
         # started the service by piping a custom config into it. So we preserve
         # whatever they passed in when restarting.
+        executable = sys.executable
+        log.debug("Executable: %s", executable)
         try:
             read_fd, write_fd = os.pipe()
             os.write(write_fd, cfg_dump.encode())
@@ -155,13 +159,15 @@ async def restart(request: web.Request) -> web.Response:
             os.close(read_fd)
             os.execvp(SERVICENAME, [SERVICENAME])
         except OSError as e:
+            # HACK: If there's an error then the service will just die after
+            # attempting to restart. Theoretically I could whip up a mechanism
+            # for a hot restart, but I don't think that's necessary. Maybe
+            # in the future.
             err_string = examine_os_error(e)
             if request.app["config"].log_level == "trace":
                 raise
-            elif request.app["config"].log_level == "debug":
-                log.exception("Error restarting service: %s", err_string)
             else:
                 log.error("Error restarting service: %s", err_string)
 
     asyncio.create_task(_restart())
-    return web.json_response({"result": "Restarting the conduit service"})
+    return web.json_response({"result": "Restarting the conduit service..."})

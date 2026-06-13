@@ -11,13 +11,13 @@ import sys
 import os
 from pathlib import Path
 import logging
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Any
 
 if TYPE_CHECKING:
     from truenas_api_conduit.config.user_config import Config
 
 # local
-from truenas_api_conduit import APP_NAME, SERVICENAME
+from truenas_api_conduit import APP_NAME, SERVICENAME, LOCK_FILE
 import truenas_api_conduit.core as core
 from truenas_api_conduit.service.base import BaseService, ServiceError
 from truenas_api_conduit.console import console_stdout  # , console_stderr
@@ -31,6 +31,7 @@ SYSTEMD_USER_DIR: Final[Path] = (
     / "systemd"
     / "user"
 )
+UNIT_FILE = SYSTEMD_USER_DIR / UNIT_NAME
 
 __all__ = [
     "LinuxService",
@@ -97,7 +98,7 @@ def detect_existing_install() -> bool:
     # System units take precedence over packaged units because local admin
     # configuration should take precedence over vendor defaults.
 
-    if (SYSTEMD_USER_DIR / UNIT_NAME).exists():
+    if (UNIT_FILE).exists():
         return True
     return False
 
@@ -118,7 +119,7 @@ def detect_existing_install() -> bool:
 class LinuxService(BaseService):
     def __init__(self) -> None:
         self.installed: bool = detect_existing_install()
-        self.unit_path: Path | None = SYSTEMD_USER_DIR / UNIT_NAME
+        self.unit_path: Path | None = UNIT_FILE
 
         #! this is not used at the moment
         self.error_mapping = {
@@ -164,7 +165,7 @@ class LinuxService(BaseService):
         env: dict[str, str] = {**os.environ, "SYSTEMD_COLORS": "1" if color else "0"}
         result = subprocess.run(cmd, capture_output=True, text=True, env=env)
 
-        log.debug("%s command returned code: %d", *args, result.returncode)
+        log.debug("%s command returned code: %s", " ".join(args), result.returncode)
 
         if result.returncode != 0:
 
@@ -185,13 +186,13 @@ class LinuxService(BaseService):
                 if show_error_warning:
                     log.warning(
                         "%s command failed: %s",
-                        *args,
+                        " ".join(args),
                         (result.stderr or result.stdout).strip(),
                     )
                 else:
                     log.debug(
                         "%s command failed (ignored): %s",
-                        *args,
+                        " ".join(args),
                         (result.stderr or result.stdout).strip(),
                     )
 
@@ -264,7 +265,7 @@ class LinuxService(BaseService):
             log.debug("Service already stopped, ignoring error")
         elif result1.returncode != 0:
             log.warning(
-                "Failed to stop the service (exit code %d): %s",
+                "Failed to stop the service (exit code %s): %s",
                 result1.returncode,
                 (result1.stderr or result1.stdout).strip(),
             )
@@ -339,45 +340,68 @@ class LinuxService(BaseService):
         # Print stdout regardless; it contains the useful human-readable block.
         output = result.stdout or result.stderr
 
-        if output and stdout:
-            console_stdout.print(output, end="")
+        if output:
+            if stdout:
+                console_stdout.print(output, end="")
             return result.returncode
         else:  # if there's no output then who tf knows what's goin on, but it ain't success.
             log.error(
-                "systemctl status produced no output (exit code %d)", result.returncode
+                "systemctl status produced no output (exit code %s)", result.returncode
             )
             return 1
 
     def detect_service(self) -> core.AppEnv:
-        # This exists to detect how the service is running. It's used by the
-        # CLI to determine how to send start/stop/reset commands to the service.
+        # This exists to detect how the service is running/installed. It's used by
+        # the CLI to determine how to send start/stop/reset commands to the service.
+        # In standalone mode, this class will be bypassed entirely. Likewise with
+        # Docker mode, which is managed by the docker container/service.
 
-        # First lets see if the lockfile exists.
+        # NOTE: This function doesn't care about whether the service is actually
+        # running or not, it just figures out if there's an OS service install.
+        # The CLI will use this information when checking if the service is running.
+
+        # * AppEnv is one of these:
+        # OS_SERVICE = "os_service"
+        # STANDALONE = "standalone"
+        # DOCKER = "docker"
+
         if lock_dict := core.read_lockfile():
             log.debug(
-                "Found lockfile with:\n" "PID: %s\nAddress: %s\nPort: %s",
+                "Found lockfile with:\n"
+                "PID: %s\nAddress: %s\nPort: %s\n App Env: %s",
                 lock_dict["pid"],
                 lock_dict["address"],
                 lock_dict["socket_port"],
                 lock_dict["app_env"],
             )
-            # This would raise an error if the app_env is invalid, but I
-            # control the lock file so I can guarantee it's valid.
-            return core.AppEnv(lock_dict["app_env"])
 
-        # If we don't find a lockfile then move onto other methods...
+            pid_alive = False
+            try:
+                os.kill(lock_dict["pid"], 0)  # signal 0 = existence check
+                pid_alive = True
+            except ProcessLookupError:
+                pid_alive = False
+            except PermissionError:
+                pid_alive = True  # process exists, we just can't signal it
+            except Exception as e:
+                log.error("Unexpected error checking service status: %s", e)
 
-        status = self.status(stdout=False)
-        # 0 or 3 would indicate its a systemd installed service
-        # 0 = running (there should be a lockfile if that's the case)
-        # 3 = stopped
-        if status in (0, 3):
+            if pid_alive:
+                return core.AppEnv(lock_dict["app_env"])
+            else:
+                log.warning(
+                    "Lockfile references PID %s which is no longer running. "
+                    "Deleting stale lockfile.", lock_dict["pid"]
+                )
+                if result := core.delete_lockfile():
+                    log.error("Failed to delete stale lockfile: %s", result)
+
+        # If lockfile is absent or stale, fallback to checking the unit file
+        if UNIT_FILE.exists():
             return core.AppEnv.OS_SERVICE
 
-        #! I believe anything else would indicate its not installed as a service,
-        # or just not installed in general. But im not 100% sure.
-        else:
-            # FIXME: improve this logic this is not very robust.
-            return core.AppEnv.STANDALONE
-
-        # NOTE: Docker should be irrelevant for this function
+        # If there's no lockfile and we can't find the unit file, we can
+        # assume the service is not installed.
+        # NOTE: The CLI will determine whether or not the service is actually
+        # running with its own checks so that's irrelevant to this function.
+        return core.AppEnv.STANDALONE

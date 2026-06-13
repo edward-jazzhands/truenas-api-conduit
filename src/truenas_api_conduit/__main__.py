@@ -318,13 +318,12 @@ def start(
 
             # The new program inherits all open file descriptors, including fd 0,
             # which it now sees as normal stdin
+            os.environ["TRUENAS_APP_ENV"] = core.AppEnv.STANDALONE.value
             os.execvp(SERVICENAME, [SERVICENAME])
         except OSError as e:
             err_string = core.examine_os_error(e)
             if cfg.log_level == "trace":
                 raise
-            elif cfg.log_level == "debug":
-                log.exception("Error restarting service: %s", err_string)
             else:
                 log.error("Error restarting service: %s", err_string)
 
@@ -668,62 +667,71 @@ def stop(ctx: click.RichContext) -> None:
     assert isinstance(ctx.obj, CLIOptions)
 
     # TWO WAYS TO STOP
-    # 1) Tell service manager to stop the service
-    # 2) Send the service a stop request
+    # 1) Send the service a stop request directly
+    # 2) Tell service manager to stop the service
 
-    #! LAST THOUGHT: We need these commands with two ways to detect if
-    # the service is running through the OS or if its in standalone mode
-
-    # Option 1: Service manager
     service = get_service_manager(core.PLATFORM)
+    
+    # This will tell us if the service is installed or not
+    detect = service.detect_service()
+    log.info("Detected service running as: %s", detect)
 
-    try:
-        service.stop()
-    except Exception as e:
-        # We don't load config for this command so just check log level
-        log_level = logging.getLogger().level
-        level_name = logging.getLevelName(log_level)
-        if level_name.lower() == "trace":
-            raise
-        else:
-            action = "stopping"
-            if isinstance(e, ServiceError):
-                err_string = (
-                    f"Encountered a systemd/systemctl error while {action} the service: "
-                )
-            else:
-                err_string = f"Unexpected error while {action} the service: "
-            err_string += f"\n\n{e} ({e.__class__.__name__})"
-            panel = make_usage_error_panel(err_string, "Service Start Error")
-            console_stderr.print(panel)
+    if detect == core.AppEnv.STANDALONE:
+
+        # Option 1: Sending a request
+        request_helper = get_request_helper()
+        log.debug(request_helper)
+        if not request_helper:
+            console_stderr.print(
+                make_usage_error_panel("TrueNAS API Conduit service is not running")
+            )
             sys.exit(1)
 
-    # Option 2: Sending a request
-    request_helper = get_request_helper()
-    log.debug(request_helper)
-    if not request_helper:
-        console_stderr.print(
-            make_usage_error_panel("TrueNAS API Conduit service is not running")
-        )
-        sys.exit(1)
+        response = request_helper(core.Endpoints.STOP, {})  # needs empty dict to POST
+        if ctx.obj.pretty:
+            try:
+                ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
+            except json.JSONDecodeError as e:
+                log.error(
+                    "Response from server is not valid JSON: %s | Disable pretty "
+                    "printing to see the raw response",
+                    e,
+                )
+                if ctx.obj.verbose >= 3:
+                    raise
+                else:
+                    sys.exit(1)
+        else:
+            ctx.console.print(response.text, soft_wrap=True)
 
-    response = request_helper(core.Endpoints.STOP, {})  # needs empty dict to POST
-    if ctx.obj.pretty:
+    elif detect == core.AppEnv.OS_SERVICE:
         try:
-            ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
-        except json.JSONDecodeError as e:
-            log.error(
-                "Response from server is not valid JSON: %s | Disable pretty "
-                "printing to see the raw response",
-                e,
-            )
-            if ctx.obj.verbose >= 3:
+            service.stop()
+        except Exception as e:
+            # We don't load config for this command so just check log level
+            log_level = logging.getLogger().level
+            level_name = logging.getLevelName(log_level)
+            if level_name.lower() == "trace":
                 raise
             else:
+                action = "stopping"
+                if isinstance(e, ServiceError):
+                    err_string = (
+                        f"Encountered a systemd/systemctl error while {action} the service: "
+                    )
+                else:
+                    err_string = f"Unexpected error while {action} the service: "
+                err_string += f"\n\n{e} ({e.__class__.__name__})"
+                panel = make_usage_error_panel(err_string, "Service Start Error")
+                console_stderr.print(panel)
                 sys.exit(1)
-    else:
-        ctx.console.print(response.text, soft_wrap=True)
 
+    elif detect == core.AppEnv.DOCKER:
+        err_panel = make_usage_error_panel(
+            "You cannot stop the service in Docker mode. Stop the docker container instead."
+        )
+        console_stderr.print(err_panel)
+        sys.exit(1)
 
 @cli.command()
 @request_options
@@ -737,61 +745,64 @@ def restart(ctx: click.RichContext) -> None:
     assert isinstance(ctx.obj, CLIOptions)
 
     # TWO WAYS TO STOP
-    # 1) Tell service manager to stop the service
-    # 2) Send the service a stop request
+    # 1) Send the service a stop request
+    # 2) Tell service manager to stop the service
 
-    # Option 1: Service manager
     from truenas_api_conduit.service import get_service_manager
 
     service = get_service_manager(core.PLATFORM)
+    detect = service.detect_service()
+    log.info("Detected service running as: %s", detect)
 
-    try:
-        service.restart()
-    except Exception as e:
-        # We don't load config for this command so just check log level
-        log_level = logging.getLogger().level
-        level_name = logging.getLevelName(log_level)
-        if level_name.lower() == "trace":
-            raise
-        else:
-            action = "restarting"
-            if isinstance(e, ServiceError):
-                err_string = (
-                    f"Encountered a systemd/systemctl error while {action} the service: "
-                )
-            else:
-                err_string = f"Unexpected error while {action} the service: "
-            err_string += f"\n\n{e} ({e.__class__.__name__})"
-            panel = make_usage_error_panel(err_string, "Service Start Error")
-            console_stderr.print(panel)
-            sys.exit(1)
+    if detect == core.AppEnv.STANDALONE:
 
-    # Option 2: Sending a request
-    request_helper = get_request_helper()
-    log.debug(request_helper)
-    if not request_helper:
-        console_stderr.print(
-            make_usage_error_panel("TrueNAS API Conduit service is not running")
-        )
-        sys.exit(1)
-
-    response = request_helper(core.Endpoints.RESTART, {})
-    if ctx.obj.pretty:
-        try:
-            ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
-        except json.JSONDecodeError as e:
-            log.error(
-                "Response from server is not valid JSON: %s | Disable pretty "
-                "printing to see the raw response",
-                e,
+        request_helper = get_request_helper()
+        log.debug(request_helper)
+        if not request_helper:
+            console_stderr.print(
+                make_usage_error_panel("TrueNAS API Conduit service is not running")
             )
-            if ctx.obj.verbose >= 3:
+            sys.exit(1)
+        response = request_helper(core.Endpoints.RESTART, {})
+
+        if ctx.obj.pretty:
+            try:
+                ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
+            except json.JSONDecodeError as e:
+                log.error(
+                    "Response from server is not valid JSON: %s | Disable pretty "
+                    "printing to see the raw response",
+                    e,
+                )
+                if ctx.obj.verbose >= 3:
+                    raise
+                else:
+                    sys.exit(1)
+        else:
+            ctx.console.print(response.text, soft_wrap=True)
+
+    elif detect == core.AppEnv.OS_SERVICE:
+
+        try:
+            service.restart()
+        except Exception as e:
+            # We don't load config for this command so just check log level
+            log_level = logging.getLogger().level
+            level_name = logging.getLevelName(log_level)
+            if level_name.lower() == "trace":
                 raise
             else:
+                action = "restarting"
+                if isinstance(e, ServiceError):
+                    err_string = (
+                        f"Encountered a systemd/systemctl error while {action} the service: "
+                    )
+                else:
+                    err_string = f"Unexpected error while {action} the service: "
+                err_string += f"\n\n{e} ({e.__class__.__name__})"
+                panel = make_usage_error_panel(err_string, "Service Start Error")
+                console_stderr.print(panel)
                 sys.exit(1)
-    else:
-        ctx.console.print(response.text, soft_wrap=True)
-
 
 @cli.command()
 @request_options
@@ -805,12 +816,35 @@ def status(ctx: click.RichContext) -> None:
     assert isinstance(ctx.obj, CLIOptions)
 
     # TWO WAYS TO GET THE STATUS
-    # 1) Ask the service manager
-    # 2) Send the service a status request
+    # 1) Send the service a status request
+    # 2) Ask the service manager
+    # * here we need to do both
 
-    # Option 1: Service manager
+    # 1: Sending a request
+    request_helper = get_request_helper()
+    log.debug(request_helper)
+    if request_helper:
+        response = request_helper(core.Endpoints.STATUS)
+        if ctx.obj.pretty:
+            try:
+                ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
+            except json.JSONDecodeError as e:
+                log.error(
+                    "Response from server is not valid JSON: %s | Disable pretty "
+                    "printing to see the raw response",
+                    e,
+                )
+                if ctx.obj.verbose >= 3:
+                    raise
+                else:
+                    sys.exit(1)
+        else:
+            ctx.console.print(response.text, soft_wrap=True)
+    else: # no request helper
+        log.error("TrueNAS API Conduit service is not running")
+
+    # 2: Service manager
     from truenas_api_conduit.service import get_service_manager
-
     service = get_service_manager(core.PLATFORM)
 
     try:
@@ -832,34 +866,6 @@ def status(ctx: click.RichContext) -> None:
             err_string += f"\n\n{e} ({e.__class__.__name__})"
             panel = make_usage_error_panel(err_string, "Service Start Error")
             console_stderr.print(panel)
-            sys.exit(1)
-
-    # Option 2: Sending a request
-    request_helper = get_request_helper()
-    log.debug(request_helper)
-    if not request_helper:
-        console_stderr.print(
-            make_usage_error_panel("TrueNAS API Conduit service is not running")
-        )
-        sys.exit(1)
-
-    response = request_helper(core.Endpoints.STATUS)
-    if ctx.obj.pretty:
-        try:
-            ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
-        except json.JSONDecodeError as e:
-            log.error(
-                "Response from server is not valid JSON: %s | Disable pretty "
-                "printing to see the raw response",
-                e,
-            )
-            if ctx.obj.verbose >= 3:
-                raise
-            else:
-                sys.exit(1)
-    else:
-        ctx.console.print(response.text, soft_wrap=True)
-
 
 set_key_help_short = f"""Set the API key using whatever compatible keyring/secrets manager
 is available on your system
@@ -924,7 +930,8 @@ def set_key(
     # my custom fallback file encrypter keyring backend. This is set to
     # lowest priority (0.0) so that it should only be used if no other
     # keyring backends are available.
-    keyring.set_keyring(FileEncrypter())
+    file_encrypter = FileEncrypter()
+    keyring.set_keyring(file_encrypter)
 
     # all_keyrings will always contain 'fail Keyring' and 'chainer ChainerBackend'
     # even if no other keyrings are present.
@@ -985,7 +992,7 @@ def set_key(
             actions.append(action_desc)
             if "FileEncrypter" in current_backend.name:
                 action_desc = "store crypt key in file"
-                if store_crypt_key(api_key):
+                if store_crypt_key(file_encrypter.crypt_key):
                     actions.append(action_desc)
     except click.Abort:
         raise

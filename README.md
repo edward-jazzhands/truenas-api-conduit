@@ -11,8 +11,8 @@ Note to humans: Hi my name is Edward Jazzhands. This readme is not written by an
 [![badge](https://img.shields.io/badge/Requires_Python->=3.12-blue&logo=python)](https://python.org)
 [![badge](https://img.shields.io/badge/license-MIT-blue)](https://opensource.org/license/mit)
 [![badge](https://img.shields.io/badge/Badges_In_Readme-5-blue)](https://en.wikipedia.org/wiki/Mathematics)
-[![badge](https://img.shields.io/badge/Made_In-Canada-red)](canadiantire.ca)
-![badge](https://img.shields.io/badge/Coded_By_Hand-95%-green)
+[![badge](https://img.shields.io/badge/Made_In-Canada-red)](https://canadiantire.ca)
+[![badge](https://img.shields.io/badge/Coded_By_Hand-95%-green)](https://www.reddit.com/r/notvibecoded/)
 
 A lightweight local service that holds a persistent, authenticated WebSocket connection to your TrueNAS instance and exposes it as a plain HTTP REST API. This can serve on localhost on your laptop/main computer, or run as a Docker container directly on the TrueNAS server.
 
@@ -61,6 +61,8 @@ hyperfine 'curl -X POST http://localhost:4567/rpc -d "{\"method\": \"core.ping\"
 ![Architecture Diagram](https://edward-jazzhands.github.io/assets/truenas-api-conduit/truenas-api-conduit.drawio.svg)
 
 The conduit is a 12-factor style service: it reads configuration from environment variables and a config file, and writes logs to stdout. You can run it as a Docker container, a system service, or a plain foreground process.
+
+# TODO: Quick demonstration of using it to get server stats into Conky
 
 ## Documentation
 

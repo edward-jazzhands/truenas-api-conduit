@@ -180,12 +180,6 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
     except Exception as e:
         if log_level <= log_mapping["TRACE"]:
             raise
-        elif log_level <= log_mapping["DEBUG"]:
-            log.exception(
-                "Could not initialize config. Raise level to -vvv (trace) "
-                "to see the full traceback."
-            )
-            sys.exit(1)
         else:
             err_string = (
                 "[default]Could not initialize config:\n\n"
