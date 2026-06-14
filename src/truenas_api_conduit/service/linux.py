@@ -1,7 +1,5 @@
 """
 Linux service implementation using systemd.
-
-Supports User, System, and Package install types.
 """
 
 # standard library
@@ -11,13 +9,13 @@ import sys
 import os
 from pathlib import Path
 import logging
-from typing import TYPE_CHECKING, Final, Any
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from truenas_api_conduit.config.user_config import Config
 
 # local
-from truenas_api_conduit import APP_NAME, SERVICENAME, LOCK_FILE
+from truenas_api_conduit import APP_NAME, SERVICENAME
 import truenas_api_conduit.core as core
 from truenas_api_conduit.service.base import BaseService, ServiceError
 from truenas_api_conduit.console import console_stdout  # , console_stderr
@@ -88,48 +86,20 @@ def resolve_daemon_executable() -> Path:
     )
 
 
-def detect_existing_install() -> bool:
-    "Detects if the service is already installed"
-
-    # Priority: 1) User, 2) System, 3) Package
-    # # HACK: WHat if there's more than one installed? This doesn't handle that
-
-    # NOTE: user units should take precedence over system units.
-    # System units take precedence over packaged units because local admin
-    # configuration should take precedence over vendor defaults.
-
-    if (UNIT_FILE).exists():
-        return True
-    return False
-
-
-# ? Common systemd/systemctl exit codes
-# Code| Meaning ----------------- |Description -----------------
-#   0 | Success/Active            |The program is running or service is OK.
-#   1 | Generic/Unspecified Error |The program is dead and the `/var/run` pid file exists.
-#   2 | Invalid Argument          |Invalid or excess arguments were passed to the command.
-#   3 | Not Running               |The program is not running (stopped cleanly).
-#   4 | Unknown Program State     |The program or service is not installed or unknown.
-#  13 | Permission Denied         |The user does not have permission to perform the operation.
-# 200 | Working Dir Missing       |Working directory is missing or inaccessible
-# 203 | Executable Missing        |Executable is missing or inaccessible
-# 217 | No such user              |The specified user does not exist
-
-
 class LinuxService(BaseService):
     def __init__(self) -> None:
-        self.installed: bool = detect_existing_install()
+        self.installed: bool = True if (UNIT_FILE).exists() else False
         self.unit_path: Path | None = UNIT_FILE
 
-        #! this is not used at the moment
-        self.error_mapping = {
-            1: "The service failed to start or stopped unexpectedly. Please check your system logs.",
-            2: None,  # this means private/user does not need to know
-            3: None,
+        self.code_mapping = {
+            0: "Success/Active",
+            1: "The service failed to start or stopped unexpectedly.",
+            2: "Invalid or excess arguments were passed to the command.",
+            3: "The service is currently stopped.",
             4: "Installation failed: The service configuration file could not be found.",
-            13: "Administrative privileges are required. Please run this application as root/sudo.",
+            13: "Administrative privileges are required. Please run as root/sudo.",
             200: "The service could not start because its working directory is missing or inaccessible.",
-            203: "The service executable could not be found or executed. Verify the installation paths.",
+            203: "The service executable could not be found or executed.",
             217: "The required system user account for this service does not exist.",
         }
 
@@ -144,6 +114,7 @@ class LinuxService(BaseService):
         color: bool = False,
         required: bool = False,
         show_error_warning: bool = True,
+        suppress_output: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         """Run a systemctl command. Detects install type and appends --user if needed.
         If required, raise ServiceError on non-zero exit."""
@@ -152,6 +123,8 @@ class LinuxService(BaseService):
         # a TTY. Even with captured stdout, it can invoke a pager if those env vars
         # are set (e.g. PAGER=less in the user's shell
         cmd: list[str] = ["systemctl", "--no-pager", "--user", *args]
+
+        log.debug("Full command: '%s'", " ".join(cmd))
 
         # NOTE: passing os.environ: for --user mode, systemctl communicates
         # with the user's D-Bus session via DBUS_SESSION_BUS_ADDRESS (and
@@ -168,7 +141,6 @@ class LinuxService(BaseService):
         log.debug("%s command returned code: %s", " ".join(args), result.returncode)
 
         if result.returncode != 0:
-
             # If required, raise an error
             # If not required, log a warning and continue
             # If not required and no warning needed, make a debug log
@@ -179,22 +151,26 @@ class LinuxService(BaseService):
                     f"Output:\n"
                     f"{result.stderr}"
                 )
-                if mapping := self.error_mapping.get(result.returncode):
+                if mapping := self.code_mapping.get(result.returncode):
                     err_string += f"\n{mapping}"
                 raise ServiceError(err_string)
             else:
-                if show_error_warning:
-                    log.warning(
-                        "%s command failed: %s",
-                        " ".join(args),
-                        (result.stderr or result.stdout).strip(),
-                    )
-                else:
-                    log.debug(
-                        "%s command failed (ignored): %s",
-                        " ".join(args),
-                        (result.stderr or result.stdout).strip(),
-                    )
+                if not suppress_output:
+                    if show_error_warning:
+                        log.warning(
+                            "%s command failed: %s",
+                            " ".join(args),
+                            (result.stderr or result.stdout).strip(),
+                        )
+                    else:
+                        log.debug(
+                            "%s command failed (ignored): %s",
+                            " ".join(args),
+                            (result.stderr or result.stdout).strip(),
+                        )
+        else:
+            if not suppress_output:
+                log.debug(result.stdout + result.stderr)
 
         return result
 
@@ -299,18 +275,21 @@ class LinuxService(BaseService):
         self.installed = False
         self.unit_path = None
 
-    def start(self, cfg: Config) -> None:
-        # TODO: The config is not used here yet, but it should be in order to
-        # pass in CLI options that the user may have set (--truenas-host and
-        # --api-key) to the service.
-        # This might require writing them out to a temp file or something, since
-        # the service has to start by itself and can't use the stdin startup
-
+    def start(self) -> None:
         # `systemctl [--user] start truenas-api-conduit`
+
+        if not self.installed:
+            console_stdout.print("No service installation detected.")
+            return
+
         self._systemctl("start", UNIT_NAME, required=True)
 
     def stop(self) -> None:
         # `systemctl [--user] stop truenas-api-conduit`
+
+        if not self.installed:
+            console_stdout.print("No service installation detected.")
+            return
 
         self._systemctl("stop", UNIT_NAME, required=True)
 
@@ -325,23 +304,39 @@ class LinuxService(BaseService):
     def restart(self) -> None:
         # `systemctl [--user] restart truenas-api-conduit`
 
+        if not self.installed:
+            console_stdout.print("No service installation detected.")
+            return
+
         self._systemctl("restart", UNIT_NAME, required=True)
 
-    def status(self, stdout: bool = True) -> int:
+    def status(self, forward_stdout: bool = True) -> int:
         # Print live service status directly from systemctl.
 
+        if not self.installed:
+            console_stdout.print("No service installation detected.")
+            return 1
+            
         # NOTE: `systemctl status` produces its own Rich-style colourised output
         # on a real TTY. We print it verbatim rather than trying to re-parse and
         # re-render it. systemd's output is already the canonical status view.
 
-        result = self._systemctl("status", UNIT_NAME, color=True)
+        result = self._systemctl("status", UNIT_NAME, color=True, suppress_output=True)
+        code = result.returncode
 
         # status exits 0 (active), 3 (inactive/dead), or other codes for errors.
         # Print stdout regardless; it contains the useful human-readable block.
         output = result.stdout or result.stderr
+        log.info("systemctl status code: %s (%s)", code, self.code_mapping[code])
+        
+        if code == 0:
+            console_stdout.print("systemd says service is active (use -sys or -v for more info)")
+        elif code == 3:
+            console_stdout.print("systemd says service is stopped (use -sys or -v for more info)")
 
         if output:
-            if stdout:
+            if forward_stdout:
+                console_stdout.print("systemd status output:\n", style="bold")
                 console_stdout.print(output, end="")
             return result.returncode
         else:  # if there's no output then who tf knows what's goin on, but it ain't success.
@@ -385,6 +380,8 @@ class LinuxService(BaseService):
                 pid_alive = True  # process exists, we just can't signal it
             except Exception as e:
                 log.error("Unexpected error checking service status: %s", e)
+            else:
+                log.debug("PID check passed")
 
             if pid_alive:
                 return core.AppEnv(lock_dict["app_env"])
@@ -405,3 +402,31 @@ class LinuxService(BaseService):
         # NOTE: The CLI will determine whether or not the service is actually
         # running with its own checks so that's irrelevant to this function.
         return core.AppEnv.STANDALONE
+
+    def logs(self, follow: bool = False, limit: int = 100) -> str | None:
+
+        if not self.installed:
+            console_stdout.print("No service installation detected.")
+            return
+
+        cmd = ["journalctl", "-u", APP_NAME, "--user", "--no-pager"]
+        
+        if follow:
+            cmd.append("-f")
+
+            log.debug("Full command: %s", " ".join(cmd))
+            os.execvp("journalctl", cmd)
+
+        else:
+            cmd.extend(["-n", f"{limit}"])
+
+            log.debug("Full command: %s", " ".join(cmd))
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0:
+                return result.stdout
+            else:
+                return None

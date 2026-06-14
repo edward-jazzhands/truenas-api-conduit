@@ -373,6 +373,7 @@ class TrueNASClient:
 
         if self._reconnecting:  # only one at a time
             return False
+        self._reconnecting = True
 
         log.info("Initiating websocket connection sequence...")
 
@@ -406,6 +407,7 @@ class TrueNASClient:
 
         log.debug("Broke out the connection loop so we must be connected now")
         assert self.is_connected.is_set()
+        self._reconnecting = False
         return True
 
     # Used in _connect and in _get_websocket_conn

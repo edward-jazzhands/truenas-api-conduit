@@ -4,7 +4,7 @@ import sys
 import logging
 import os
 import json
-from typing import Any, Callable
+from typing import Any, Callable, assert_never
 
 # third-party
 import rich_click as click
@@ -172,13 +172,12 @@ main_commands = [
     "restart",
     "status",
     "uninstall",
+    "logs",
 ]
 
 config_commands = [
-    "set_key",
     "config",
-    "config_path",
-    "print_config",
+    "set_key",
     "completions",
 ]
 
@@ -199,19 +198,21 @@ context = {
     "rich_console": console_stdout,
 }
 
+main_help = """TrueNAS API Conduit - A websocket proxy service for the TrueNAS API.\n
+This will hold the websocket connection open so that subsequent requests can
+re-use the same connection. It can be installed as a service, or run as a
+standalone program without installing.\n
+Most of the commands have more info in their respective help menus"""
 
-@click.group(cls=CustomGroup, context_settings=context)
+
+@click.group(cls=CustomGroup, context_settings=context, help=main_help)
 @click.command_panel("Commands", commands=main_commands)
 @click.command_panel("Config", commands=config_commands)
 @click.command_panel("Help", commands=help_commands)
 @common_options
 @click.pass_context
 def cli(ctx: click.RichContext) -> None:
-    """TrueNAS API Conduit - A websocket proxy service for the TrueNAS API.
 
-    This will hold the websocket connection open so that subsequent requests can
-    re-use the same connection. It can be installed as a service, or run as a
-    standalone program without installing"""
 
     ctx.ensure_object(CLIOptions)
 
@@ -235,28 +236,31 @@ def cli(ctx: click.RichContext) -> None:
     # be passed through so that the subcommand setup gets the full context.
 
 
-start_help_short = f"""Tell your OS to start the conduit service
-([{COLORS.command}]start --help[default] for more info)"""
+start_help_short = """Tell your OS to start the conduit service"""
 
 start_help = f"""Tell your OS to start the conduit service.\n
+\n
 You can also start the program directly as a standalone program without installing
 by using the [{COLORS.option}]--standalone[/{COLORS.option}] option, which
 runs in the foreground by default.\n
-Tip: to run standalone in the background, use:
-[{COLORS.command}]truenas-api start --standalone & disown[default]
-(Mac + Linux) or
-[{COLORS.command}]Start-Process truenas-api start
---standalone[default] (Windows)"""
+\n
+Tip: to run standalone in the background, use:\n
+\n
+(Mac + Linux):  [{COLORS.command}]truenas-api start --standalone & disown[default]\n
+(Windows):      [{COLORS.command}]Start-Process truenas-api start
+--standalone[default]"""
 
 standalone_help = """Start the service as a standalone program in the foreground (not
 run by your service manager). Does not require installation"""
 
-api_key_help = f"""Ask to be prompted for your TrueNAS API key. You can also use the
+api_key_help = f"""(Only with [{COLORS.command}]--standalone[default])
+Ask to be prompted for your TrueNAS API key. You can also use the
 [{COLORS.command}]set-key[default] command (recommended), set the
 [{COLORS.envvar}]api_key[default] field in the config file, or set the
 environment variable [env: [{COLORS.envvar}]TRUENAS_API_KEY[default]=]"""
 
-truenas_host_help = f"""The address that you use to access the TrueNAS Web UI over
+truenas_host_help = f"""(Only with [{COLORS.command}]--standalone[default])
+The address that you use to access the TrueNAS Web UI over
 HTTPS. You can also set the [{COLORS.envvar}]truenas_host[default]
 field in the config file, or set the environment variable
 [env:[{COLORS.envvar}] TRUENAS_HOST[default]=]"""
@@ -264,8 +268,8 @@ field in the config file, or set the environment variable
 
 @cli.command(help=start_help, short_help=start_help_short)
 @click.option("--standalone", is_flag=True, default=False, help=standalone_help)
-@click.option("--api-key", is_flag=True, default=None, help=api_key_help)
-@click.option("--truenas-host", help=truenas_host_help)
+@click.option("-api", "--api-key", is_flag=True, default=None, help=api_key_help)
+@click.option("-host", "--truenas-host", help=truenas_host_help)
 @common_options
 @click.pass_context
 def start(
@@ -278,6 +282,11 @@ def start(
     logging_setup(ctx)
     assert ctx.console is not None
 
+    if (api_key or truenas_host) and not standalone:
+        raise click.UsageError(
+            "You can only use the --api-key and --truenas-host options with --standalone"
+        )
+        
     ctx.obj.api_key = api_key
     ctx.obj.truenas_host = truenas_host
     cfg = config_setup(ctx.obj)
@@ -336,7 +345,7 @@ def start(
 
         # service manager will check if its installed and exit if not
         try:
-            service.start(cfg)
+            service.start()
         except Exception as e:
             if cfg.log_level == "trace":
                 raise
@@ -350,39 +359,27 @@ def start(
                 panel = make_usage_error_panel(err_string, "Service Start Error")
                 console_stderr.print(panel)
                 sys.exit(1)
+        else:
+            ctx.console.print("TrueNAS API Conduit service started successfully")
 
 
-install_help_short = f"""Install the TrueNAS API Conduit service
-([{COLORS.command}]install --help[default] for more info)"""
+install_help_short = """Install the TrueNAS API Conduit service"""
 
 install_help = """Install the TrueNAS API Conduit service.\n
-On Linux and MacOS, the default is to install as a user service and does not
-require elevation. On Windows, elevation is required to install"""
+On Linux and MacOS, this will install as a user service and does not
+require elevation. On Windows, elevation is required to install
 
-system_help = """Install the service as a system service. This requires elevation"""
-package_help = """This is intended to be used by package managers"""
-
+On Linux: registers the program with systemd
+On MacOS: registers the program with launchd
+On Windows: registers the program with the Windows Service Manager
+"""
 
 @cli.command(help=install_help, short_help=install_help_short)
-@click.option("--system", "-s", is_flag=True, default=False, help=system_help)
-@click.option(
-    "--package", "-p", is_flag=True, default=False, help=package_help, hidden=True
-)
 @common_options
 @click.pass_context
 def install(
-    ctx: click.RichContext,
-    system: bool = False,
-    package: bool = False,
+    ctx: click.RichContext
 ) -> None:
-
-    if system and package:
-        raise click.UsageError("You cannot specify both --system and --package")
-
-    if package:
-        # TODO: need some validation to ensure this is actually being done by
-        # the package manager. Might not even use this function, not sure yet.
-        pass
 
     logging_setup(ctx)
     assert ctx.console is not None
@@ -414,6 +411,8 @@ def install(
             panel = make_usage_error_panel(err_string, "Service Start Error")
             console_stderr.print(panel)
             sys.exit(1)
+    else:
+        ctx.console.print("TrueNAS API Conduit service installed successfully")
 
 
 @cli.command()
@@ -452,15 +451,39 @@ def uninstall(ctx: click.RichContext) -> None:
             panel = make_usage_error_panel(err_string, "Service Start Error")
             console_stderr.print(panel)
             sys.exit(1)
+    else:
+        ctx.console.print("TrueNAS API Conduit service was uninstalled")
 
 
-request_help_short = f"""Make a request using the service. The service must be running
-([{COLORS.command}]request --help[default] for more info)"""
+request_help_short = "Make a request using the service. The service must be running"
+
+
+param_ex = """truenas-api request reporting.get_data --params '[{"name": "cpu"}]'"""
 
 request_help = f"""Make a request using the service. The service must be running.\n
 Example: [{COLORS.command}]truenas-api request system.info[default]\n
-Use the [{COLORS.command}]cheatsheet[default] command to see a list
-of some common requests and examples of how to use them"""
+\n
+You can also pipe the response into jq to filter and format the results:\n
+[{COLORS.command}]truenas-api request disk.query | jq[default]\n
+\n
+Example of using the --params option (most TrueNAS API methods
+can accept parameters to filter the results):\n
+[{COLORS.command}]{param_ex}[default]\n
+\n
+The --filter option is a shortcut for passing in filter triplet arrays
+to the --params option. Each -f flag (stackable) is equivalent to passing in a
+single filter triplet. For example:\n
+[{COLORS.command}]truenas-api request app.query -f name = 'dockge'[default]\n
+\n
+Use the [{COLORS.command}]cheatsheet[default] command to see a bigger list
+of some common requests and usage examples.\n
+Use the [{COLORS.command}]reference[default] command to print the URL to the API
+reference on your server for the full list of everything you can request.\n
+\n
+Note: this program has no knowledge of what methods are available, it just
+forwards the request to the TrueNAS API and returns the JSON response verbatim.
+This will also return any TrueNAS errors to you if the request worked
+but you've requested something invalid."""
 
 filters_help = f"""Add a filter to the request. Filters are in the form of
 'filter triplets' as defined by the TrueNAS API. Triplet format is
@@ -654,12 +677,15 @@ def request(
     else:
         ctx.console.print(response.text, soft_wrap=True)
 
+direct_help = """Send the stop request directly to the service,
+bypassing the OS service manager (only relevant if installed, standalone
+mode does this automatically)"""
 
 @cli.command()
-@request_options
+@click.option("-d", "--direct", is_flag=True, default=False, help=direct_help)
 @common_options
 @click.pass_context
-def stop(ctx: click.RichContext) -> None:
+def stop(ctx: click.RichContext, direct: bool = False) -> None:
     """Stop the conduit service"""
 
     logging_setup(ctx)
@@ -676,8 +702,7 @@ def stop(ctx: click.RichContext) -> None:
     detect = service.detect_service()
     log.info("Detected service running as: %s", detect)
 
-    if detect == core.AppEnv.STANDALONE:
-
+    if (detect == core.AppEnv.STANDALONE) or direct:
         # Option 1: Sending a request
         request_helper = get_request_helper()
         log.debug(request_helper)
@@ -725,6 +750,8 @@ def stop(ctx: click.RichContext) -> None:
                 panel = make_usage_error_panel(err_string, "Service Start Error")
                 console_stderr.print(panel)
                 sys.exit(1)
+        else:
+            ctx.console.print("TrueNAS API Conduit service was stopped")
 
     elif detect == core.AppEnv.DOCKER:
         err_panel = make_usage_error_panel(
@@ -732,9 +759,16 @@ def stop(ctx: click.RichContext) -> None:
         )
         console_stderr.print(err_panel)
         sys.exit(1)
+    else:
+        assert_never(detect)
+
+
+direct_help = """Send the restart request directly to the service,
+bypassing the OS service manager (only relevant if installed, standalone
+mode does this automatically)"""
 
 @cli.command()
-@request_options
+@click.option("-d", "--direct", is_flag=True, default=False, help=direct_help)
 @common_options
 @click.pass_context
 def restart(ctx: click.RichContext) -> None:
@@ -748,14 +782,12 @@ def restart(ctx: click.RichContext) -> None:
     # 1) Send the service a stop request
     # 2) Tell service manager to stop the service
 
-    from truenas_api_conduit.service import get_service_manager
-
     service = get_service_manager(core.PLATFORM)
     detect = service.detect_service()
     log.info("Detected service running as: %s", detect)
 
-    if detect == core.AppEnv.STANDALONE:
 
+    if detect == core.AppEnv.STANDALONE:
         request_helper = get_request_helper()
         log.debug(request_helper)
         if not request_helper:
@@ -782,7 +814,6 @@ def restart(ctx: click.RichContext) -> None:
             ctx.console.print(response.text, soft_wrap=True)
 
     elif detect == core.AppEnv.OS_SERVICE:
-
         try:
             service.restart()
         except Exception as e:
@@ -803,14 +834,34 @@ def restart(ctx: click.RichContext) -> None:
                 panel = make_usage_error_panel(err_string, "Service Start Error")
                 console_stderr.print(panel)
                 sys.exit(1)
+        else:
+            ctx.console.print("TrueNAS API Conduit service restarted")
 
-@cli.command()
+    elif detect == core.AppEnv.DOCKER:
+        err_panel = make_usage_error_panel(
+            "You cannot restart the service in Docker mode. Restart the docker container instead."
+        )
+        console_stderr.print(err_panel)
+        sys.exit(1)
+    else:
+        assert_never(detect)
+    
+
+status_help_short = """Check the status/ping of the conduit service"""
+
+status_help = """Check the status/ping of the conduit service.
+This can query the service directly, or ask your operating system (if installed).\n
+This returns the response in JSON (if not using the --system option)."""
+
+system_status_help = "View the OS service manager's status output, if installed"
+
+@cli.command(help=status_help, short_help=status_help_short)
+@click.option("-sys", "--system", is_flag=True, default=False, help=system_status_help)
 @request_options
 @common_options
 @click.pass_context
-def status(ctx: click.RichContext) -> None:
-    """Check the status/ping of the conduit service"""
-
+def status(ctx: click.RichContext, system: bool = False) -> None:
+    
     logging_setup(ctx)
     assert ctx.console is not None
     assert isinstance(ctx.obj, CLIOptions)
@@ -818,37 +869,114 @@ def status(ctx: click.RichContext) -> None:
     # TWO WAYS TO GET THE STATUS
     # 1) Send the service a status request
     # 2) Ask the service manager
-    # * here we need to do both
 
-    # 1: Sending a request
-    request_helper = get_request_helper()
-    log.debug(request_helper)
-    if request_helper:
-        response = request_helper(core.Endpoints.STATUS)
-        if ctx.obj.pretty:
-            try:
-                ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
-            except json.JSONDecodeError as e:
-                log.error(
-                    "Response from server is not valid JSON: %s | Disable pretty "
-                    "printing to see the raw response",
-                    e,
+    running = False
+    if not system:
+        # 1: Sending a request
+        request_helper = get_request_helper()
+        log.debug(request_helper)
+        if request_helper:
+            response = request_helper(core.Endpoints.STATUS)
+            if ctx.obj.pretty:
+                try:
+                    ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
+                except json.JSONDecodeError as e:
+                    log.error(
+                        "Response from server is not valid JSON: %s | Disable pretty "
+                        "printing to see the raw response",
+                        e,
+                    )
+                    if ctx.obj.verbose >= 3:
+                        raise
+                    else:
+                        sys.exit(1)
+            else:
+                ctx.console.print(response.text, soft_wrap=True)
+                running = True
+        else: # no request helper
+            ctx.console.print("TrueNAS API Conduit service is not running")
+            # NOTE: here we don't immediately exit, proceed to check if the
+            # service is installed
+
+    if system or not running:
+        # 2: Asking the service manager
+        service = get_service_manager(core.PLATFORM)
+        detect = service.detect_service()
+        log.info("Detected service running as: %s", detect)
+
+        if detect == core.AppEnv.STANDALONE:
+            # Not installed, just exit
+            sys.exit(1)
+
+        if system and (detect != core.AppEnv.OS_SERVICE):
+            console_stderr.print(
+                make_usage_error_panel(
+                    "--system can only be used with the service in OS mode"
                 )
-                if ctx.obj.verbose >= 3:
-                    raise
-                else:
-                    sys.exit(1)
-        else:
-            ctx.console.print(response.text, soft_wrap=True)
-    else: # no request helper
-        log.error("TrueNAS API Conduit service is not running")
+            )
+            sys.exit(1)
 
-    # 2: Service manager
-    from truenas_api_conduit.service import get_service_manager
+        try:
+            service.status(forward_stdout=system)
+        except Exception as e:
+            # We don't load config for this command so just check log level
+            log_level = logging.getLogger().level
+            level_name = logging.getLevelName(log_level)
+            if level_name.lower() == "trace":
+                raise
+            else:
+                action = "checking status of"
+                if isinstance(e, ServiceError):
+                    err_string = (
+                        f"Encountered a systemd/systemctl error while {action} the service: "
+                    )
+                else:
+                    err_string = f"Unexpected error while {action} the service: "
+                err_string += f"\n\n{e} ({e.__class__.__name__})"
+                panel = make_usage_error_panel(err_string, "Service Start Error")
+                console_stderr.print(panel)
+
+logs_helps_short = """Read the system logs for the service (must be installed)"""
+
+# HACK: These help menus might be OS specific. I'll probably need to adjust
+# the wording to make it applicable to Mac and Windows.
+
+logs_help = f"""Read the system logs for the service (must be installed).\n
+You can pipe this into a log viewer (such as 'lnav') to view the logs
+in real time (ie.: [{COLORS.command}]truenas-api logs -f | lnav[default]).\n
+Note that -f opens the system logger directly and will not have any color.
+Recommended to install a proper log viewer like `lnav`"""
+
+follow_help = """Follow/tail the log output (Note: This just runs the system logger
+directly, which is why it can be piped, but it has no color by itself)"""
+
+limit_help = "The number of logs to print. Exclusive with --follow"
+
+@cli.command(help=logs_help, short_help=logs_helps_short)
+@click.option("-f", "--follow", is_flag=True, default=False, help=follow_help)
+@click.option("-l", "--limit", type=int, default=100, help=limit_help, show_default=True)
+@common_options
+@click.pass_context
+def logs(ctx: click.RichContext, limit: int, follow: bool = False) -> None:
+
+    logging_setup(ctx)
+    assert ctx.console is not None
+    assert isinstance(ctx.obj, CLIOptions)
+
     service = get_service_manager(core.PLATFORM)
+    detect = service.detect_service()
+    log.info("Detected service running as: %s", detect)
+
+    if detect != core.AppEnv.OS_SERVICE:
+        console_stderr.print(
+            make_usage_error_panel(
+                "You can only get the logs for the service in OS mode"
+            )
+        )
+        sys.exit(1)
 
     try:
-        service.status(stdout=True)
+        logs = service.logs(follow=follow, limit=limit)
     except Exception as e:
         # We don't load config for this command so just check log level
         log_level = logging.getLogger().level
@@ -866,10 +994,15 @@ def status(ctx: click.RichContext) -> None:
             err_string += f"\n\n{e} ({e.__class__.__name__})"
             panel = make_usage_error_panel(err_string, "Service Start Error")
             console_stderr.print(panel)
+    else:
+        if logs and not follow:
+            ctx.console.print(logs)
+        else:
+            ctx.console.print("No logs found")
 
-set_key_help_short = f"""Set the API key using whatever compatible keyring/secrets manager
-is available on your system
-([{COLORS.command}]set-key --help[default] for more info)"""
+
+set_key_help_short = """Set the API key using whatever compatible keyring/secrets manager
+is available on your system"""
 
 set_key_help = f"""Set the API key using whatever compatible keyring/secrets manager
 is available on your system.\n
@@ -1050,91 +1183,78 @@ def set_key(
 
 
 config_help = f"""Attempts to open the config file in your editor, if
-[env: [{COLORS.envvar}]EDITOR[default]=] is set"""
+[env: [{COLORS.envvar}]EDITOR[default]=] is set. Contains options to print
+the path to the config file, or print the config to stdout, etc."""
 
+print_path_help = "Print the path to the config file (you can pipe this)"
+
+print_config_help = f"""Validate and output your current configuration as JSON to
+stdout. If you combine the [{COLORS.command}]--unmask[default] option, then the
+generated JSON may be piped to truenas-api-conduitd via stdin.
+"""
+
+unmask_help = f"""(Used with [{COLORS.command}]--print-config[default]) reveals the
+API key in the JSON output. May trigger a password prompt"""
 
 @cli.command(help=config_help)
-@common_options
-@click.pass_context
-def config(ctx: click.RichContext) -> None:
-
-    logging_setup(ctx)
-    assert ctx.console is not None
-    ctx.console.no_color = True
-
-    prompt_for_config()
-
-    editor = os.environ.get("EDITOR")
-    if editor:
-        console_stderr.print(
-            "Remember you must restart the service to apply any changes", style="italic"
-        )
-        os.execvp(editor, [editor, core.CONFIG_PATH])
-    else:
-        err_string = (
-            f"No editor set. Set the [{COLORS.envvar}]$EDITOR[default] "
-            "environment variable"
-        )
-        console_stderr.print(make_usage_error_panel(err_string), "Config Error")
-        sys.exit(1)
-
-
-@cli.command()
-@common_options
-@click.pass_context
-def config_path(ctx: click.RichContext) -> None:
-    """Print the path to the config file (you can pipe this)"""
-
-    logging_setup(ctx)
-    assert ctx.console is not None
-
-    prompt_for_config()
-
-    ctx.console.no_color = True
-    ctx.console.print(core.CONFIG_PATH)  # stdout for piping
-    console_stderr.print(f"Created already?: {core.CONFIG_PATH.exists()}")
-    console_stderr.print(
-        f"[italic]Tip: You can pipe this command into an editor:[/italic]"
-        f"""  [{COLORS.command}]nano $(truenas-api config-path)""",
-        markup=True,
-    )
-
-
-print_config_help_short = f"""Validate and output your current configuration as
-JSON to stdout
-([{COLORS.command}]print-config --help[default] for more info)"""
-
-print_config_help = f"""Output your current configuration as JSON to
-stdout. If you use the [{COLORS.command}]--unmask[default] option, then this
-can be saved and passed in to the service's stdin to start it. If using --unmask
-and the API key is stored with the [{COLORS.option}]set-key[default]
-command, you may be prompted for a password for encryption key"""
-
-unmask_help = """Output your API key in plain text. This is useful if you want to
-store the configuration JSON in a file and pass it to the service's stdin to start
-it. May trigger a password prompt"""
-
-
-@cli.command(help=print_config_help, short_help=print_config_help_short)
+@click.option("-p", "--print-path", is_flag=True, default=False, help=print_path_help)
+@click.option("-c", "--print-config", is_flag=True, default=False, help=print_config_help)
 @click.option("-u", "--unmask", is_flag=True, default=False, help=unmask_help)
 @common_options
 @click.pass_context
-def print_config(ctx: click.RichContext, unmask: bool = False) -> None:
+def config(
+    ctx: click.RichContext,
+    print_path: bool = False,
+    print_config: bool = False,
+    unmask: bool = False,
+) -> None:
+
+    if print_path and print_config:
+        raise click.UsageError("You cannot specify both --print-path and --print-config")
+
+    if unmask and not print_config:
+        raise click.UsageError("--unmask must be used with --print-config")
 
     logging_setup(ctx)
     assert ctx.console is not None
+    ctx.console.no_color = True
 
     prompt_for_config()
 
-    cfg = config_setup(ctx.obj, unmask=unmask)
-    json_dict = cfg.model_dump_json(indent=2, context={"unmask": unmask})
-
-    ctx.console.print(json_dict)
-    if ctx.obj.verbose == 0:
+    if print_path:
+        ctx.console.no_color = True
+        ctx.console.print(core.CONFIG_PATH)  # stdout for piping
+        console_stderr.print(f"Created already?: {core.CONFIG_PATH.exists()}")
         console_stderr.print(
-            "\n[italic]Tip: set verbosity/logging to info to see provenance[/italic]",
+            f"[italic]Tip: You can pipe this command into an editor:[/italic]"
+            f"""  [{COLORS.command}]nano $(truenas-api config -p)""",
             markup=True,
         )
+
+    elif print_config:
+        cfg = config_setup(ctx.obj, unmask=unmask)
+        json_dict = cfg.model_dump_json(indent=2, context={"unmask": unmask})
+
+        ctx.console.print(json_dict)
+        if ctx.obj.verbose == 0:
+            console_stderr.print(
+                "\n[italic]Tip: set verbosity/logging to info to see provenance[/italic]",
+                markup=True,
+            )
+    else:
+        editor = os.environ.get("EDITOR")
+        if editor:
+            console_stderr.print(
+                "Remember you must restart the service to apply any changes", style="italic"
+            )
+            os.execvp(editor, [editor, core.CONFIG_PATH])
+        else:
+            err_string = (
+                f"No editor set. Set the [{COLORS.envvar}]$EDITOR[default] "
+                "environment variable"
+            )
+            console_stderr.print(make_usage_error_panel(err_string), "Config Error")
+            sys.exit(1)
 
 
 @cli.command()

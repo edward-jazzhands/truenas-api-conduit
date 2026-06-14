@@ -77,12 +77,12 @@ def init_logging(service: bool = False):
     rich_handler_normal.addFilter(AppFilter())
     rich_handler_normal.setFormatter(formatter)
 
-    rich_handler_debug = make_rich_handler(show_time=True, show_path=True, stdout=service)
+    rich_handler_debug = make_rich_handler(show_time=service, show_path=True, stdout=service)
     rich_handler_debug.addFilter(AppFilter())
     rich_handler_debug.setFormatter(formatter)
 
     rich_handler_libraries = make_rich_handler(
-        show_time=True, show_path=True, stdout=service
+        show_time=service, show_path=True, stdout=service
     )
     rich_handler_libraries.addFilter(LibraryFilter())
     rich_handler_libraries.setFormatter(libformatter)
@@ -118,7 +118,8 @@ def set_log_level(level: int) -> None:
 
 
 def enable_timestamps() -> None:
-    "used by the service to enable timestamps if on info or higher"
+    """used by the service to enable timestamps if on info or higher (only
+    in standalone mode)"""
 
     if _handlers_storage is None:
         raise RuntimeError("Logging not initialized")

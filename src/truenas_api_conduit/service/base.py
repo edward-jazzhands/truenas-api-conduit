@@ -22,7 +22,7 @@ class BaseService(ABC):
         pass
 
     @abstractmethod
-    def start(self, cfg: Config) -> None:
+    def start(self) -> None:
         pass
 
     @abstractmethod
@@ -34,7 +34,7 @@ class BaseService(ABC):
         pass
 
     @abstractmethod
-    def status(self, stdout: bool = True) -> int:
+    def status(self, forward_stdout: bool = True) -> int:
         # Status should print whatever the actual service manager prints to stdout
         # and *then* return the exit code of the command (at least on Linux, not sure
         # if this equally applies to mac and windows)
@@ -46,6 +46,10 @@ class BaseService(ABC):
         # if it's in standalone mode
         pass
 
+    @abstractmethod
+    def logs(self, follow: bool = False, limit: int = 100) -> str | None:
+        pass
+
 
 def get_service_manager(platform: core.Platform) -> BaseService:
     """A single `get_service_manager()` factory function resolves the correct
@@ -54,16 +58,13 @@ def get_service_manager(platform: core.Platform) -> BaseService:
     """
     match platform:
         case core.Platform.LINUX:
-            from .linux import LinuxService
-
+            from truenas_api_conduit.service.linux import LinuxService
             return LinuxService()
         case core.Platform.WINDOWS:
-            from .windows import WindowsService
-
+            from truenas_api_conduit.service.windows import WindowsService
             return WindowsService()
         case core.Platform.MACOS:
-            from .macos import MacOSService
-
+            from truenas_api_conduit.service.macos import MacOSService
             return MacOSService()
         case _:
             assert_never(platform)

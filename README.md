@@ -4,8 +4,6 @@
   <img src="https://edward-jazzhands.github.io/assets/truenas-api-conduit/banner-no-theme.png" alt="Textual Window banner">
 </picture>
 
-Note to humans: Hi my name is Edward Jazzhands. This readme is not written by an AI. A human actually typed this shit up using brain cells and calories. Same thing with the code. I'm a python expert (close to, at least) and this project is made almost entirely of hand-written code, with no coding agent used in development whasoever.
-
 # TrueNAS API Conduit
 
 [![badge](https://img.shields.io/badge/Requires_Python->=3.12-blue&logo=python)](https://python.org)
@@ -15,6 +13,8 @@ Note to humans: Hi my name is Edward Jazzhands. This readme is not written by an
 [![badge](https://img.shields.io/badge/Coded_By_Hand-95%-green)](https://www.reddit.com/r/notvibecoded/)
 
 A lightweight local service that holds a persistent, authenticated WebSocket connection to your TrueNAS instance and exposes it as a plain HTTP REST API. This can serve on localhost on your laptop/main computer, or run as a Docker container directly on the TrueNAS server.
+
+Note to humans: Hi, my name is Edward Jazzhands. This readme is not AI generated, a human actually typed this shit up using brain cells and calories. Same thing with the code. I'm a python expert (close to, at least) and this project is made almost entirely of hand-written code, with no coding agent used in development whasoever. Where I do use AI, it's to tutor me on how to code difficult things so I can learn faster while writing most of the code myself.
 
 ## The Raison D'etre
 
@@ -56,6 +56,19 @@ hyperfine 'curl -X POST http://localhost:4567/rpc -d "{\"method\": \"core.ping\"
 
 **~50x faster per request**, for the entire lifetime of the service. Every tool that talks to your NAS gets this for free. They can also all share the one persistent websocket connection.
 
+## Features
+
+- Supports all TrueNAS API methods (the service passes through the request directly, it has no knowledge of what methods are available).
+- Full color CLI is built-in, with thorough help menus, and meticulously designed by a human that thought about how it feels to use it (built with [rich-click](https://github.com/ewels/rich-click)).
+- Returns the server's response verbatim as JSON, so you can pipe it into jq to filter and format the results.
+- The service works by providing a simple REST API which can be used by curl, wget, or any other tool that can make HTTP requests. You could also write your own program to use the service.
+- Includes a --filter option in the CLI to make it easier to use the API (This is different from using jq as it filters the results server-side instead of client-side, and you can combine server filters with client filters).
+- Install as a system service on Linux, Mac, or Windows.
+- Install as a Docker container directly on your TrueNAS server.
+- Run in standalone/foreground mode (no install required).
+- Keyring integration so you can avoid storing your TrueNAS API key in plain text.
+- Fallback file encryption for the API key for usage in minimal environments.
+
 ## How It Works
 
 ![Architecture Diagram](https://edward-jazzhands.github.io/assets/truenas-api-conduit/truenas-api-conduit.drawio.svg)
@@ -79,3 +92,20 @@ Use the [issues](https://github.com/edward-jazzhands/truenas-api-conduit/issues)
 MIT. See LICENSE file.
 
 TrueNAS Copyright [iX Systems](https://www.ixsystems.com/)
+
+Made possible by utilizing these awesome third-party Python libraries:
+
+- [pydantic-settings](https://github.com/pydantic/pydantic-settings)
+- [aiohttp](https://github.com/aio-libs/aiohttp)
+- [websockets](https://github.com/python-websockets/websockets)
+- [requests](https://github.com/psf/requests)
+- [rich](https://github.com/Textualize/rich)
+- [click](https://github.com/pallets/click)
+- [rich-click](https://github.com/ewels/rich-click)
+- [click-didyoumean](https://github.com/click-contrib/click-didyoumean)
+- [keyring](https://github.com/jaraco/keyring)
+- [secretstorage](https://github.com/mitya57/secretstorage)
+- [cryptography](https://github.com/pyca/cryptography)
+- [psutil](https://github.com/giampaolo/psutil)
+- [yaspin](https://github.com/pavdmyt/yaspin)
+- [platformdirs](https://github.com/platformdirs/platformdirs)

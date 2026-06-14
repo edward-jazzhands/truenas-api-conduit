@@ -71,7 +71,9 @@ async def truenas_context_manager(app: web.Application):
     if cfg.log_level not in ("trace", "debug"):
         # The CLI only has timestamps for debug or trace but the service should
         # always have timestamps
-        log_setup.enable_timestamps()
+        if app_globals.app_env == core.AppEnv.STANDALONE:
+            log_setup.enable_timestamps()
+        # for service and docker modes, they'll have their own timestamps
 
     log.info("Starting TrueNAS API websocket client")
     loop = asyncio.get_running_loop()
@@ -133,9 +135,9 @@ async def main(cfg: Config) -> None:
         loop.add_signal_handler(signal.SIGINT, handle_async_exit)
         loop.add_signal_handler(signal.SIGTERM, handle_async_exit)
     except NotImplementedError:
-        # this will happen on windows
-        loop.add_signal_handler(signal.SIGHUP, handle_async_exit)
-        loop.add_signal_handler(signal.SIGQUIT, handle_async_exit)
+        # Windows asyncio doesn't support add_signal_handler natively.
+        # It relies on standard KeyboardInterrupt bubbling up to asyncio.run(main())
+        log.warning("Signal handlers not supported on this OS. Relying on default interrupts.")
 
     app.router.add_post("/request", endpoints.request_handler)
     app.router.add_get("/status", endpoints.status)
@@ -238,7 +240,7 @@ def start():
     else:
         # If the env var is not set it probably means the user ran the
         # truenas-api-conduit entrypoint directly.
-        # *local_app_env = core.AppEnv.STANDALONE
+        appenv_enum = core.AppEnv.STANDALONE
         
         if log_level <= level_mapping["TRACE"]:
             raise ValueError("TRUENAS_APP_ENV environment variable is not set")

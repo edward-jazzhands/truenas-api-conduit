@@ -55,6 +55,14 @@ def make_success_panel(msg: str, title: str = "Success") -> Panel:
     msg = "[default]" + msg
     return Panel(msg, title=title, title_align="left", style="bright_green")
 
+def require_tty(prompt_description: str, additional: str = "") -> None:
+    if not sys.stdin.isatty():
+        console_stderr.print(
+            f"Cannot prompt for {prompt_description}: stdin is not a TTY.",
+        )
+        if additional:
+            console_stderr.print(additional)
+        sys.exit(1)
 
 def logging_setup(ctx: click.RichContext) -> None:
 
@@ -122,6 +130,7 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
     # only used by the start command
     if cli_options.api_key:
         log.debug("Prompting for API key")
+        require_tty("API key")
         api_key = click.prompt("Enter your TrueNAS API key", hide_input=True)
     else:
         api_key = None
@@ -293,28 +302,34 @@ def _toml_decoding_error_panel(e: tomllib.TOMLDecodeError) -> None:
 
 
 def prompt_for_config() -> None:
+    """Used in commands that need to ensure the config dir exists, but without
+    triggering the full pydantic config validation: set-key, and config. In case
+    the user tries to open/read the config file before they've run the program
+    for the first time."""
 
     if not core.CONFIG_DIR.exists():
-        console_stderr.print(
-            "The config directory has not been created yet. Do you want "
-            "to create it now? (y/n)"
-        )
-        answer = click.prompt("Enter 'y' to create the config directory")
-        if answer.lower() not in ("y", "yes"):
-            console_stderr.print("Cancelled")
-            sys.exit(1)
-        else:
-            core.ensure_config()
+
+        if sys.stdin.isatty():
+            console_stderr.print(
+                "The config directory has not been created yet. Do you want "
+                "to create it now? (y/n)"
+            )
+            answer = click.prompt("Enter 'y' to create the config directory")
+            if answer.lower() not in ("y", "yes"):
+                console_stderr.print("Cancelled")
+                sys.exit(1)
+
+        core.ensure_config()
 
     if not core.CONFIG_PATH.exists():
-        console_stderr.print(
-            "The config file is missing. Do you want to create a new one "
-            "with the default settings? (y/n)"
-        )
-        answer = click.prompt("Enter 'y' to create the config file")
-        if answer.lower() not in ("y", "yes"):
-            console_stderr.print("Cancelled")
-            sys.exit(1)
-        else:
-            core.ensure_config()
-        sys.exit(1)
+        if sys.stdin.isatty():
+
+            console_stderr.print(
+                "The config file is missing. Do you want to create a new one "
+                "with the default settings? (y/n)"
+            )
+            answer = click.prompt("Enter 'y' to create the config file")
+            if answer.lower() not in ("y", "yes"):
+                console_stderr.print("Cancelled")
+                sys.exit(1)
+        core.ensure_config()

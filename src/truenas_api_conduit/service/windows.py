@@ -15,7 +15,7 @@ class WindowsService(BaseService):
     def uninstall(self) -> None:
         pass
 
-    def start(self, cfg: Config) -> None:
+    def start(self) -> None:
         pass
 
     def stop(self) -> None:
@@ -24,7 +24,7 @@ class WindowsService(BaseService):
     def restart(self) -> None:
         pass
 
-    def status(self, stdout: bool = True) -> int:
+    def status(self, forward_stdout: bool = True) -> int:
         return 0
 
     def detect_service(self) -> core.AppEnv:
@@ -32,3 +32,7 @@ class WindowsService(BaseService):
             return core.AppEnv.OS_SERVICE
         else:
             return core.AppEnv.STANDALONE
+
+    def logs(self, follow: bool = False, limit: int = 100) -> str | None:
+
+        pass

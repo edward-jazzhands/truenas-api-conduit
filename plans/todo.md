@@ -1,8 +1,18 @@
-[ ] Get service install working on Linux
+[X] Get service install working on Linux
 [ ] Get service install working on Mac
 [ ] Get service install working on Windows
 [ ] Write first version of dockerfile for the containerized service
+[ ] Integrate systemd-python for better service integration in the service
+[ ] Write unit tests for everything
+[ ] Add an env command to the CLI to see all env vars and which are currently set
 [ ] Add tracking of which versions of the TrueNAS API the current version is validated against (this should very rarely change)
+[X] write status options to separate/toggle OS status message passthrough
+[X] Create logs command to print the system logs on the base class and services
+[X] Improve log streaming and piping to less/lnav
+[X] Roll config-path and print-config commands into the config command
+[X] Ensure all relevant commands are compatible with jq and add jq usage examples to the CLI helps
+[X] Add a 'features' section to the main Readme
+[X] Add force override options to send stop/restart commands straight to the service instead of through the OS service manager
 [X] Make logging change to stdout when running in the service
 [X] Make prompt for encryption key retry on wrong key
 [X] Add connection diagnostic to the TrueNAS websocket client
