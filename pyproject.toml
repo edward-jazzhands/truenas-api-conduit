@@ -16,7 +16,6 @@ dependencies = [
     "psutil>=7.2.2",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.1",
-    "requests>=2.34.2",
     "rich-click>=1.9.7",
     "secretstorage>=3.5.0",
     "websockets>=11.0.1",

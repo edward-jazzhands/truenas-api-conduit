@@ -2,24 +2,20 @@
 import sys
 import logging
 import os
-from typing import Any, TYPE_CHECKING
+import asyncio
+from typing import Any
 from dataclasses import dataclass
-
-if TYPE_CHECKING:
-    import requests
 
 # third-party
 import psutil
 
 # project
-from truenas_api_conduit import APP_NAME
+from truenas_api_conduit import APP_NAME, SERVICENAME
 import truenas_api_conduit.core as core
 
 log = logging.getLogger(__name__)
 
 __all__ = ["get_request_helper", "RequestHelper"]
-
-SERVICE_NAME = APP_NAME + "d"
 
 
 @dataclass
@@ -27,6 +23,11 @@ class ServerConfig:
     address: str
     port: int
     request_header: str | None = None
+
+@dataclass
+class RawResponse:
+    status: int
+    text: str
 
 
 class RequestHelper:
@@ -44,7 +45,7 @@ class RequestHelper:
 
     def __call__(
         self, endpoint: core.Endpoints, json_dict: dict[str, Any] | None = None
-    ) -> requests.Response:
+    ) -> RawResponse:
         """no json = GET
         pass in json = POST"""
 
@@ -52,15 +53,18 @@ class RequestHelper:
             raise ValueError(f"Invalid endpoint: {endpoint}")
 
         log.info("Making request")
+        return asyncio.run(self._make_request(endpoint, json_dict))
 
-        import requests
+    async def _make_request(
+        self, endpoint: core.Endpoints, json_dict: dict[str, Any] | None
+    ) -> RawResponse:
+        import aiohttp
         import yaspin
         from yaspin.spinners import Spinners
 
-        if self.request_header:
-            headers = {APP_NAME: self.request_header}
-        else:
-            headers = None
+        headers: dict[str, str] | None = (
+            {APP_NAME: self.request_header} if self.request_header else None
+        )
 
         try:
             with yaspin.yaspin(
@@ -68,29 +72,33 @@ class RequestHelper:
                 text="Sending request...",
                 stream=sys.stderr,
             ):
-                if json_dict is not None:
-                    response = requests.post(
-                        f"http://{self.address}:{self.port}{endpoint}",
-                        json=json_dict,
-                        timeout=10,
-                        headers=headers,
-                    )
-                else:
-                    response = requests.get(
-                        f"http://{self.address}:{self.port}{endpoint}",
-                        timeout=10,
-                        headers=headers,
-                    )
+                async with aiohttp.ClientSession() as session:
+                    if json_dict is not None:
+                        async with session.post(
+                            f"http://{self.address}:{self.port}{endpoint}",
+                            json=json_dict,
+                            timeout=aiohttp.ClientTimeout(total=10),
+                            headers=headers,
+                        ) as response:
+                            text = await response.text()
+                            status = response.status
+                    else:
+                        async with session.get(
+                            f"http://{self.address}:{self.port}{endpoint}",
+                            timeout=aiohttp.ClientTimeout(total=10),
+                            headers=headers,
+                        ) as response:
+                            text = await response.text()
+                            status = response.status
 
-        except requests.exceptions.RequestException as e:
+        except aiohttp.ClientError as e:
             log.error("Could not connect to TrueNAS API Conduit service: %s", e)
             sys.exit(1)
         except Exception as e:
             log.error("Unexpected error making request: %s", e)
             sys.exit(1)
 
-        return response
-
+        return RawResponse(status=status, text=text)
 
 def auto_find_server_config(
     lock_dict: dict[str, Any] | None, lock_file_bad: bool = False
@@ -104,9 +112,9 @@ def auto_find_server_config(
             cmdline = proc.info["cmdline"] or []
             # match against the executable name (index 0) and the first argument (index 1, the
             # script/module path) rather than the full joined cmdline, to avoid false positives
-            # where SERVICE_NAME appears as a substring of an unrelated argument or path component.
+            # where SERVICENAME appears as a substring of an unrelated argument or path component.
             exe_and_script = cmdline[:2]
-            if any(SERVICE_NAME in part for part in exe_and_script):
+            if any(SERVICENAME in part for part in exe_and_script):
                 service_proc = proc
                 break
         except psutil.NoSuchProcess, psutil.AccessDenied:
@@ -225,7 +233,7 @@ def check_service_status() -> ServerConfig | None:
                     lock_dict["pid"],
                     proc_ident,
                 )
-                if SERVICE_NAME in proc_ident:
+                if SERVICENAME in proc_ident:
                     log.debug("Name matches, checking signal")
                     # only return the lockfile port if we can confirm the process is alive
                     # via signal. If the signal fails, the PID is gone and the lockfile is stale.

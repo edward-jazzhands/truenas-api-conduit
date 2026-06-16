@@ -10,6 +10,7 @@
 [ ] Create a .rpm package (Fedora)
 [ ] Create a .pkg.tar.zst package (Arch)
 [ ] Create submission for TrueNAS App Marketplace
+[ ] Replace requests lib with aiohttp client
 [?] Integrate systemd-python for better service integration in the service
 [ ] Write unit tests for everything
 [ ] Add support for docker Secrets

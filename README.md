@@ -98,7 +98,6 @@ Made possible by utilizing these awesome third-party Python libraries:
 - [pydantic-settings](https://github.com/pydantic/pydantic-settings)
 - [aiohttp](https://github.com/aio-libs/aiohttp)
 - [websockets](https://github.com/python-websockets/websockets)
-- [requests](https://github.com/psf/requests)
 - [rich](https://github.com/Textualize/rich)
 - [click](https://github.com/pallets/click)
 - [rich-click](https://github.com/ewels/rich-click)

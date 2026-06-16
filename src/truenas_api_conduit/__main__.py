@@ -659,7 +659,8 @@ def request(
     )
     if ctx.obj.pretty:
         try:
-            ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
+            jsons = json.loads(response.text)
+            ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
         except json.JSONDecodeError as e:
             log.error(
                 "Response from server is not valid JSON: %s | Disable pretty "
@@ -715,7 +716,8 @@ def stop(ctx: click.RichContext, direct: bool = False) -> None:
         response = request_helper(core.Endpoints.STOP, {})  # needs empty dict to POST
         if ctx.obj.pretty:
             try:
-                ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
+                jsons = json.loads(response.text)
+                ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
             except json.JSONDecodeError as e:
                 log.error(
                     "Response from server is not valid JSON: %s | Disable pretty "
@@ -799,7 +801,8 @@ def restart(ctx: click.RichContext) -> None:
 
         if ctx.obj.pretty:
             try:
-                ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
+                jsons = json.loads(response.text)
+                ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
             except json.JSONDecodeError as e:
                 log.error(
                     "Response from server is not valid JSON: %s | Disable pretty "
@@ -878,8 +881,9 @@ def status(ctx: click.RichContext, system: bool = False) -> None:
             response = request_helper(core.Endpoints.STATUS)
             if ctx.obj.pretty:
                 try:
+                    jsons = json.loads(response.text)
                     ctx.console.print(
-                        json.dumps(response.json(), indent=2), soft_wrap=True
+                        json.dumps(jsons, indent=2), soft_wrap=True
                     )
                 except json.JSONDecodeError as e:
                     log.error(
