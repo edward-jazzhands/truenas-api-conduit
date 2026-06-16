@@ -54,6 +54,23 @@ class AppEnv(Enum):
     DOCKER = "docker"
 
 
+ENV_VARS: list[str] = [
+    "TRUENAS_HOST",
+    "TRUENAS_API_KEY",
+    "TRUENAS_CERT_PATH",
+    "TRUENAS_VALIDATE_CERTS",
+    "TRUENAS_LOG_LEVEL",
+    "TRUENAS_SOCKET_PORT",
+    "TRUENAS_SERVICE_ADDRESS",
+    "TRUENAS_API_ROUTE",
+    "TRUENAS_REQUEST_HEADER",
+    "TRUENAS_CRYPT_KEY",
+    "RICH_CLICK_THEME",
+    "NO_COLOR",
+    "EDITOR",
+]
+
+
 def detect() -> Platform:
     match sys.platform:
         case "linux":
@@ -80,16 +97,12 @@ SLASH: Final[str] = "/" if PLATFORM == Platform.LINUX else "\\"
 # standard practice for cross-platform apps with a user-editable config file.
 # For Linux we follow the XDG Base Directory specification instead.
 
-XDG_CONFIG_HOME: Final[Path] = (
-    Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+XDG_CONFIG_HOME: Final[Path] = Path(
+    os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config"))
 )
 
-PKG_CONFIG_FILE: Final[str] = "config.toml"
-
 CONFIG_DIR: Final[Path] = (
-    XDG_CONFIG_HOME / APP_NAME
-    if PLATFORM == Platform.LINUX
-    else Path.home() / APP_NAME
+    XDG_CONFIG_HOME / APP_NAME if PLATFORM == Platform.LINUX else Path.home() / APP_NAME
 )
 
 CONFIG_FILE_NAME: Final[str] = "truenas-api.conf"
@@ -110,6 +123,7 @@ CRYPT_FILE_NAME: Final[str] = ".cryptkey"
 CRYPT_KEY_PATH: Final[Path] = CONFIG_DIR / CRYPT_FILE_NAME
 CRYPT_KEY_ENV: Final[str] = "TRUENAS_CRYPT_KEY"
 
+
 def ensure_storage_dir() -> None:
     _ensure_storage_dir(STORAGE_DIR)
 
@@ -121,4 +135,3 @@ def delete_lockfile() -> str | None:
     except OSError as e:
         return examine_os_error(e)
     return None
-        

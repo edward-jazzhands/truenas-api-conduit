@@ -77,7 +77,9 @@ def init_logging(service: bool = False):
     rich_handler_normal.addFilter(AppFilter())
     rich_handler_normal.setFormatter(formatter)
 
-    rich_handler_debug = make_rich_handler(show_time=service, show_path=True, stdout=service)
+    rich_handler_debug = make_rich_handler(
+        show_time=service, show_path=True, stdout=service
+    )
     rich_handler_debug.addFilter(AppFilter())
     rich_handler_debug.setFormatter(formatter)
 

@@ -1,6 +1,7 @@
 from truenas_api_conduit.core import AppEnv
 from dataclasses import dataclass
 
+
 @dataclass
 class AppGlobals:
     is_config_frozen: bool = False
@@ -14,6 +15,5 @@ class AppGlobals:
             raise ValueError(f"Invalid TRUENAS_APP_ENV: {env}")
         app_globals.app_env = env
 
+
 app_globals: AppGlobals = AppGlobals()
-
-

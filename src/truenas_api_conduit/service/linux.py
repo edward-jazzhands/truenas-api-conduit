@@ -313,7 +313,7 @@ class LinuxService(BaseService):
         if not self.installed:
             console_stdout.print("No service installation detected.")
             return 1
-            
+
         # NOTE: `systemctl status` produces its own Rich-style colourised output
         # on a real TTY. We print it verbatim rather than trying to re-parse and
         # re-render it. systemd's output is already the canonical status view.
@@ -325,11 +325,15 @@ class LinuxService(BaseService):
         # Print stdout regardless; it contains the useful human-readable block.
         output = result.stdout or result.stderr
         log.info("systemctl status code: %s (%s)", code, self.code_mapping[code])
-        
+
         if code == 0:
-            console_stdout.print("systemd says service is active (use -sys or -v for more info)")
+            console_stdout.print(
+                "systemd says service is active (use -sys or -v for more info)"
+            )
         elif code == 3:
-            console_stdout.print("systemd says service is stopped (use -sys or -v for more info)")
+            console_stdout.print(
+                "systemd says service is stopped (use -sys or -v for more info)"
+            )
 
         if output:
             if forward_stdout:
@@ -359,8 +363,7 @@ class LinuxService(BaseService):
 
         if lock_dict := core.read_lockfile():
             log.debug(
-                "Found lockfile with:\n"
-                "PID: %s\nAddress: %s\nPort: %s\n App Env: %s",
+                "Found lockfile with:\n" "PID: %s\nAddress: %s\nPort: %s\n App Env: %s",
                 lock_dict["pid"],
                 lock_dict["address"],
                 lock_dict["socket_port"],
@@ -385,7 +388,8 @@ class LinuxService(BaseService):
             else:
                 log.warning(
                     "Lockfile references PID %s which is no longer running. "
-                    "Deleting stale lockfile.", lock_dict["pid"]
+                    "Deleting stale lockfile.",
+                    lock_dict["pid"],
                 )
                 if result := core.delete_lockfile():
                     log.error("Failed to delete stale lockfile: %s", result)
@@ -407,7 +411,7 @@ class LinuxService(BaseService):
             return
 
         cmd = ["journalctl", "-u", APP_NAME, "--user", "--no-pager"]
-        
+
         if follow:
             cmd.append("-f")
 
@@ -418,11 +422,7 @@ class LinuxService(BaseService):
             cmd.extend(["-n", f"{limit}"])
 
             log.debug("Full command: %s", " ".join(cmd))
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True
-            )
+            result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
                 return result.stdout
             else:

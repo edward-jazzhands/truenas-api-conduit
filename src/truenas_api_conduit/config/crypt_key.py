@@ -9,11 +9,16 @@ from truenas_api_conduit.console import console_stderr
 import click
 
 # project
-from truenas_api_conduit.core import CONFIG_DIR, CRYPT_KEY_PATH, CRYPT_FILE_NAME, SLASH, CRYPT_KEY_ENV
+from truenas_api_conduit.core import (
+    CONFIG_DIR,
+    CRYPT_KEY_PATH,
+    CRYPT_FILE_NAME,
+    SLASH,
+    CRYPT_KEY_ENV,
+)
 from truenas_api_conduit import COLORS
 
 log = logging.getLogger(__name__)
-
 
 
 # NOTE: the crypt_key_callback is a function which  provides a way for the

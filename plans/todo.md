@@ -18,6 +18,7 @@
 [ ] Implement the "start locked" feature
 [X] Add an env command to the CLI to see all env vars and which are currently set
 [ ] Add tracking of which versions of the TrueNAS API the current version is validated against (this should very rarely change)
+[ ] Fix NO_COLOR env var to work with setting 0/false/no
 [X] Improve the completions command to be more robust and show the correct shell
 [X] write status options to separate/toggle OS status message passthrough
 [X] Create logs command to print the system logs on the base class and services

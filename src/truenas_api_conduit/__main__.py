@@ -220,7 +220,6 @@ Most of the commands have more info in their respective help menus"""
 @click.pass_context
 def cli(ctx: click.RichContext) -> None:
 
-
     ctx.ensure_object(CLIOptions)
 
     # NOTE: having the common_options decorator on the main group means those
@@ -284,7 +283,7 @@ def start(
         raise click.UsageError(
             "You can only use the --api-key and --truenas-host options with --standalone"
         )
-        
+
     ctx.obj.api_key = api_key
     ctx.obj.truenas_host = truenas_host
     cfg = config_setup(ctx.obj)
@@ -372,12 +371,11 @@ On MacOS: registers the program with launchd
 On Windows: registers the program with the Windows Service Manager
 """
 
+
 @cli.command(help=install_help, short_help=install_help_short)
 @common_options
 @click.pass_context
-def install(
-    ctx: click.RichContext
-) -> None:
+def install(ctx: click.RichContext) -> None:
 
     logging_setup(ctx)
     assert ctx.console is not None
@@ -675,12 +673,14 @@ def request(
     else:
         ctx.console.print(response.text, soft_wrap=True)
 
+
 stop_help = """Stop the conduit service. This will detect if its running
 as an OS service or in standalone mode and send the stop request accordingly"""
 
 stop_direct_help = """Force the stop request to go directly to the service,
 bypassing the OS service manager (only relevant if installed, standalone
 mode does this automatically)"""
+
 
 @cli.command(help=stop_help)
 @click.option("-d", "--direct", is_flag=True, default=False, help=stop_direct_help)
@@ -697,7 +697,7 @@ def stop(ctx: click.RichContext, direct: bool = False) -> None:
     # 2) Tell service manager to stop the service
 
     service = get_service_manager(core.PLATFORM)
-    
+
     # This will tell us if the service is installed or not
     detect = service.detect_service()
     log.info("Detected service running as: %s", detect)
@@ -741,9 +741,7 @@ def stop(ctx: click.RichContext, direct: bool = False) -> None:
             else:
                 action = "stopping"
                 if isinstance(e, ServiceError):
-                    err_string = (
-                        f"Encountered a systemd/systemctl error while {action} the service: "
-                    )
+                    err_string = f"Encountered a systemd/systemctl error while {action} the service: "
                 else:
                     err_string = f"Unexpected error while {action} the service: "
                 err_string += f"\n\n{e} ({e.__class__.__name__})"
@@ -770,6 +768,7 @@ restart_direct_help = """Force the restart request to go directly to the service
 bypassing the OS service manager (only relevant if installed, standalone
 mode does this automatically)"""
 
+
 @cli.command(help=restart_help)
 @click.option("-d", "--direct", is_flag=True, default=False, help=restart_direct_help)
 @common_options
@@ -787,7 +786,6 @@ def restart(ctx: click.RichContext) -> None:
     service = get_service_manager(core.PLATFORM)
     detect = service.detect_service()
     log.info("Detected service running as: %s", detect)
-
 
     if detect == core.AppEnv.STANDALONE:
         request_helper = get_request_helper()
@@ -827,9 +825,7 @@ def restart(ctx: click.RichContext) -> None:
             else:
                 action = "restarting"
                 if isinstance(e, ServiceError):
-                    err_string = (
-                        f"Encountered a systemd/systemctl error while {action} the service: "
-                    )
+                    err_string = f"Encountered a systemd/systemctl error while {action} the service: "
                 else:
                     err_string = f"Unexpected error while {action} the service: "
                 err_string += f"\n\n{e} ({e.__class__.__name__})"
@@ -847,7 +843,7 @@ def restart(ctx: click.RichContext) -> None:
         sys.exit(1)
     else:
         assert_never(detect)
-    
+
 
 status_help_short = """Check the status/ping of the conduit service"""
 
@@ -857,13 +853,14 @@ This returns the response in JSON (if not using the --system option)."""
 
 system_status_help = "View the OS service manager's status output, if installed"
 
+
 @cli.command(help=status_help, short_help=status_help_short)
 @click.option("-sys", "--system", is_flag=True, default=False, help=system_status_help)
 @request_options
 @common_options
 @click.pass_context
 def status(ctx: click.RichContext, system: bool = False) -> None:
-    
+
     logging_setup(ctx)
     assert ctx.console is not None
     assert isinstance(ctx.obj, CLIOptions)
@@ -881,7 +878,9 @@ def status(ctx: click.RichContext, system: bool = False) -> None:
             response = request_helper(core.Endpoints.STATUS)
             if ctx.obj.pretty:
                 try:
-                    ctx.console.print(json.dumps(response.json(), indent=2), soft_wrap=True)
+                    ctx.console.print(
+                        json.dumps(response.json(), indent=2), soft_wrap=True
+                    )
                 except json.JSONDecodeError as e:
                     log.error(
                         "Response from server is not valid JSON: %s | Disable pretty "
@@ -895,7 +894,7 @@ def status(ctx: click.RichContext, system: bool = False) -> None:
             else:
                 ctx.console.print(response.text, soft_wrap=True)
                 running = True
-        else: # no request helper
+        else:  # no request helper
             ctx.console.print("TrueNAS API Conduit service is not running")
             # NOTE: here we don't immediately exit, proceed to check if the
             # service is installed
@@ -929,14 +928,13 @@ def status(ctx: click.RichContext, system: bool = False) -> None:
             else:
                 action = "checking status of"
                 if isinstance(e, ServiceError):
-                    err_string = (
-                        f"Encountered a systemd/systemctl error while {action} the service: "
-                    )
+                    err_string = f"Encountered a systemd/systemctl error while {action} the service: "
                 else:
                     err_string = f"Unexpected error while {action} the service: "
                 err_string += f"\n\n{e} ({e.__class__.__name__})"
                 panel = make_usage_error_panel(err_string, "Service Start Error")
                 console_stderr.print(panel)
+
 
 logs_helps_short = """Read the system logs for the service (must be installed)"""
 
@@ -955,6 +953,7 @@ directly, which is why it can be piped, but it has no color by itself)"""
 
 limit_help = "The number of logs to print. Exclusive with --follow"
 
+
 @cli.command(help=logs_help, short_help=logs_helps_short)
 @click.option("-f", "--follow", is_flag=True, default=False, help=follow_help)
 @click.option("-l", "--limit", type=int, default=100, help=limit_help, show_default=True)
@@ -972,9 +971,7 @@ def logs(ctx: click.RichContext, limit: int, follow: bool = False) -> None:
 
     if detect != core.AppEnv.OS_SERVICE:
         console_stderr.print(
-            make_usage_error_panel(
-                "You can only get the logs for the service in OS mode"
-            )
+            make_usage_error_panel("You can only get the logs for the service in OS mode")
         )
         sys.exit(1)
 
@@ -1199,6 +1196,7 @@ generated JSON may be piped to truenas-api-conduitd via stdin.
 unmask_help = f"""(Used with [{COLORS.command}]--print-config[default]) reveals the
 API key in the JSON output. May trigger a password prompt"""
 
+
 @cli.command(help=config_help)
 @click.option("-p", "--print-path", is_flag=True, default=False, help=print_path_help)
 @click.option("-c", "--print-config", is_flag=True, default=False, help=print_config_help)
@@ -1248,7 +1246,8 @@ def config(
         editor = os.environ.get("EDITOR")
         if editor:
             console_stderr.print(
-                "Remember you must restart the service to apply any changes", style="italic"
+                "Remember you must restart the service to apply any changes",
+                style="italic",
             )
             os.execvp(editor, [editor, core.CONFIG_PATH])
         else:
@@ -1260,7 +1259,10 @@ def config(
             sys.exit(1)
 
 
-cheatsheet_help = """Print a cheatsheet showing how to do a bunch of commmon API requests"""
+cheatsheet_help = (
+    """Print a cheatsheet showing how to do a bunch of commmon API requests"""
+)
+
 
 @cli.command(help=cheatsheet_help)
 @common_options
@@ -1316,7 +1318,9 @@ def reference(ctx: click.RichContext) -> None:
 
     ctx.console.print(f"https://{cfg.truenas_host}/api/docs/current")
 
+
 version_help = """Print the version of the TrueNAS API Conduit service"""
+
 
 @cli.command(help=version_help)
 @common_options
@@ -1331,14 +1335,16 @@ def version(ctx: click.RichContext) -> None:
 
     ctx.console.print(f"{APP_NAME} {__version__}")
 
+
 completions_help = """Print the commands to enable tab completions in your shell
 (you can eval this)"""
 
+
 @cli.command(help=completions_help)
 @click.argument(
-    "shell", 
-    required=False, 
-    type=click.Choice(["bash", "zsh", "fish"], case_sensitive=False)
+    "shell",
+    required=False,
+    type=click.Choice(["bash", "zsh", "fish"], case_sensitive=False),
 )
 @common_options
 @click.pass_context
@@ -1363,15 +1369,19 @@ def completions(ctx: click.RichContext, shell: str | None) -> None:
     # 2. Base Configuration (Defaults to Bash)
     command = "bash_source"
     eval_template1 = 'eval "$(_TRUENAS_API_COMPLETE={command} truenas-api)"'
-    eval_template2 = 'eval "$(_TRUENAS_API_CONDUIT_COMPLETE={command} truenas-api-conduit)"'
-    
+    eval_template2 = (
+        'eval "$(_TRUENAS_API_CONDUIT_COMPLETE={command} truenas-api-conduit)"'
+    )
+
     # 3. Adjust for specific shells
     if shell == "zsh":
         command = "zsh_source"
     elif shell == "fish":
         command = "fish_source"
         eval_template1 = "_TRUENAS_API_COMPLETE={command} truenas-api | source"
-        eval_template2 = "_TRUENAS_API_CONDUIT_COMPLETE={command} truenas-api-conduit | source"
+        eval_template2 = (
+            "_TRUENAS_API_CONDUIT_COMPLETE={command} truenas-api-conduit | source"
+        )
 
     # Print the raw completion script triggers
     ctx.console.print(eval_template1.format(command=command))
@@ -1380,7 +1390,7 @@ def completions(ctx: click.RichContext, shell: str | None) -> None:
     # 4. Generate dynamic tip based on the resolved shell
     # If the user passed the shell manually, include it in the tip's instruction
     shell_suffix = f" {shell}" if user_provided_shell else ""
-    
+
     if shell == "fish":
         eval_instruction = f"truenas-api completions{shell_suffix} | source"
     else:
@@ -1395,8 +1405,10 @@ def completions(ctx: click.RichContext, shell: str | None) -> None:
         markup=True,
     )
 
+
 env_help = """Print out a list of all environment variables which can be used by
 the service, and their current values"""
+
 
 @cli.command(help=env_help)
 @common_options
@@ -1406,27 +1418,5 @@ def env(ctx: click.RichContext) -> None:
     logging_setup(ctx)
     assert ctx.console is not None
 
-    env_vars: dict[str, str | None] ={
-        "TRUENAS_HOST": None,
-        "TRUENAS_API_KEY": None,
-        "TRUENAS_CERT_PATH": None,
-        "TRUENAS_VALIDATE_CERTS": None,
-        "TRUENAS_LOG_LEVEL": None,
-        "TRUENAS_SOCKET_PORT": None,
-        "TRUENAS_SERVICE_ADDRESS": None,
-        "TRUENAS_API_ROUTE": None,
-        "TRUENAS_REQUEST_HEADER": None,
-        "TRUENAS_CRYPT_KEY": None,
-        "RICH_CLICK_THEME": None,
-        "NO_COLOR": None,
-        "EDITOR": None,
-    }
-
-    for k, v in os.environ.items():
-        if k in env_vars:
-            env_vars[k] = v
-
-    # ctx.console.print(env_vars)
-    for k, v in env_vars.items():
-        ctx.console.print(f"{k}: {v}")
-
+    for k in core.ENV_VARS:
+        ctx.console.print(f"{k}: {os.environ.get(k)}")

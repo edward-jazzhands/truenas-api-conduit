@@ -21,12 +21,12 @@ from truenas_api_conduit.errors import ConduitError
 from truenas_api_conduit.config import Config
 from truenas_api_conduit.core.conn_diag import ConnDiag, run_connection_diagnostic
 
-OPEN_TIMEOUT:       Final[int] = 5  #   when creating the websocket client
-REQUEST_WAIT_TIME:  Final[int] = 10  #  how long to wait for response in a call
-HEARTBEAT:          Final[int] = 30  #  from client to TrueNAS
-PING_TIMEOUT:       Final[int] = 10  #  how long to wait if a heartbeat fails
+OPEN_TIMEOUT: Final[int] = 5  #   when creating the websocket client
+REQUEST_WAIT_TIME: Final[int] = 10  #  how long to wait for response in a call
+HEARTBEAT: Final[int] = 30  #  from client to TrueNAS
+PING_TIMEOUT: Final[int] = 10  #  how long to wait if a heartbeat fails
 MAX_RECONNECT_WAIT: Final[int] = 60  #  max wait between reconnections if connection drops
-SHUTDOWN_TIMEOUT:   Final[int] = 5  #   ow long to wait for the client task to finish
+SHUTDOWN_TIMEOUT: Final[int] = 5  #   ow long to wait for the client task to finish
 
 log = logging.getLogger(__name__)
 

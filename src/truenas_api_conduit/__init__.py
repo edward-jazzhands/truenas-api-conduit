@@ -6,7 +6,7 @@ from pathlib import Path
 
 from rich.traceback import install as tb_install
 
-import truenas_api_conduit.log_setup as log_setup  # <- this is run on import
+import truenas_api_conduit.log_setup as log_setup
 from truenas_api_conduit.console import console_stderr
 
 __all__ = [

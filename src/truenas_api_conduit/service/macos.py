@@ -40,7 +40,7 @@ __all__ = [
 def build_plist(executable: Path) -> bytes:
     label: str = f"io.{APP_NAME}"
 
-    # NOTE: macOS doesn't have a true equivalent to journald. launchd's logging 
+    # NOTE: macOS doesn't have a true equivalent to journald. launchd's logging
     # goes through asl/unified logging if you don't set StandardOutPath/StandardErrorPath,
     # but capturing that programmatically is more complex than journal queries.
     # Redirecting to log files is the normal approach in apple ecosystem.
@@ -67,8 +67,10 @@ def build_plist(executable: Path) -> bytes:
 
     return plistlib.dumps(plist_dict)
 
+
 def write_plist(executable: Path, dest: Path) -> None:
     dest.write_bytes(build_plist(executable))
+
 
 class MacOSService(BaseService):
 
@@ -95,7 +97,6 @@ class MacOSService(BaseService):
             return core.AppEnv.OS_SERVICE
         else:
             return core.AppEnv.STANDALONE
-
 
     def logs(self, follow: bool = False, limit: int = 100) -> str | None:
 

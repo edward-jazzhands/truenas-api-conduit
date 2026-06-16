@@ -2,8 +2,9 @@
 from pathlib import Path
 import shutil
 import logging
+from typing import Final
 
-from truenas_api_conduit.core import PKG_CONFIG_FILE
+PKG_CONFIG_FILE: Final[str] = "config.toml"
 
 
 def ensure_config(CONFIG_DIR: Path, CONFIG_PATH: Path) -> None:

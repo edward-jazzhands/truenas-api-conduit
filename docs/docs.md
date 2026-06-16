@@ -76,31 +76,8 @@ THIS SECTION IS NOT WRITTEN YET.
 
 You can enter environment values directly into your compose file, but its better to place them in a file called .env beside the compose file and let Docker read from it (Docker does this automatically).
 
-```yaml
-services:
-  truenas-conduit:
-    image: edward-jazzhands/truenas-api-conduit:latest
-    restart: unless-stopped
-    user: '${UID}:${GID}'
-    environment:
-      TRUENAS_HOST: ${TRUENAS_HOST}
-      API_KEY: ${API_KEY}
-      TRUENAS_CERT_PATH: ${TRUENAS_CERT_PATH}
-      VALIDATE_CERTS: ${VALIDATE_CERTS}
-      API_ROUTE: ${API_ROUTE}
-      LOG_LEVEL: ${LOG_LEVEL}
-      NO_COLOR: ${NO_COLOR}
-      SOCKET_PORT: ${SOCKET_PORT}
-      SERVICE_ADDRESS: ${SERVICE_ADDRESS}
-    volumes:
-      # Bind mount the folder containing your config file to use it
-      # See Configuration section in docs (above)
-      - ${CONFIG_DIR}:/config
-    ports:
-      # bind to loopback only
-      - "127.0.0.1:4567:4567" 
+WRITE COMPOSE FILE EXAMPLE HERE WHEN READY
 
-```
 
 ```sh
 docker compose up -d
@@ -110,28 +87,7 @@ docker compose up -d
 
 The conduit can run as a Docker container directly on your TrueNAS server. The WebSocket hop becomes a container-local network call, and the per-request latency remains in the 10–15ms range. Other containers can then reach the conduit without it being exposed to your broader network at all:
 
-```yaml
-services:
-  truenas-conduit:
-    image: yourusername/truenas-api-conduit:latest
-    restart: unless-stopped
-    environment:
-      TRUENAS_HOST: 192.168.1.100
-      TRUENAS_API_KEY: your-api-key-here
-      TRUENAS_VERIFY_SSL: "false"
-    # No ports: block -- only reachable by containers on this network
-    networks:
-      - dashboard_net
-
-  homepage:
-    image: ghcr.io/gethomepage/homepage:latest
-    # ... your existing homepage config
-    networks:
-      - dashboard_net
-
-networks:
-  dashboard_net:
-```
+WRITE COMPOSE FILE EXAMPLE HERE WHEN READY
 
 With this setup, the conduit is only reachable by containers on `dashboard_net` and is never exposed to your LAN. Scope your API key to read-only access to reduce the blast radius further.
 
@@ -139,7 +95,7 @@ With this setup, the conduit is only reachable by containers on `dashboard_net` 
 
 ## Usage
 
-The conduit exposes a single endpoint: `POST /rpc`
+The conduit exposes a request endpoint: `POST /request`
 
 The request body mirrors the TrueNAS JSON-RPC 2.0 method call format:
 
@@ -202,7 +158,7 @@ Sample output:
   "ws_conn secure": true,
   "truenas_cert_path": null,
   "validate_certs": false,
-  "api_key": "2-HsvigfjT...",
+  "api_key": "*******",
   "log_level": "info",
   "no_color": false
 }
@@ -211,7 +167,7 @@ Sample output:
 
 ## Security Notes
 
-- By default the HTTP server binds to `127.0.0.1` only and is not reachable from other machines on your network.
+- By default, when running on your laptop/dekstop (Ie. Installed, or standalone), the HTTP server binds to `127.0.0.1` only and is not reachable from other machines on your network.
 - In Docker deployments, use a dedicated internal network rather than publishing the port, unless you specifically need external access.
 - Create a dedicated TrueNAS user account with a scoped API key for the conduit rather than using an admin key.
-- The conduit does not implement its own authentication -- it is designed to be a localhost/internal-network service. Do not expose it to the public internet.
+- The conduit does not implement its own authentication, it is designed to be a localhost/internal-network service. Do not expose it to the public internet.

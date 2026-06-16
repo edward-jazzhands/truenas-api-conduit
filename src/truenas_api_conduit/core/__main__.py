@@ -5,7 +5,8 @@ import sys
 import logging
 import asyncio
 import signal
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
+from asyncio import AbstractEventLoop
 
 if TYPE_CHECKING:
     # This module will look at app_globals.is_config_frozen to determine if
@@ -137,7 +138,9 @@ async def main(cfg: Config) -> None:
     except NotImplementedError:
         # Windows asyncio doesn't support add_signal_handler natively.
         # It relies on standard KeyboardInterrupt bubbling up to asyncio.run(main())
-        log.warning("Signal handlers not supported on this OS. Relying on default interrupts.")
+        log.warning(
+            "Signal handlers not supported on this OS. Relying on default interrupts."
+        )
 
     app.router.add_post("/request", endpoints.request_handler)
     app.router.add_get("/status", endpoints.status)
@@ -175,7 +178,7 @@ def error_handler(err_string: str, log_level: str, e: BaseException):
         sys.exit(1)
 
 
-def start():
+def start(loop_factory: Callable[[], AbstractEventLoop] | None = None):
 
     # NOTE: on the CLI side I allow the model to not be frozen. The CLI
     # can modify some settings in the config while it's building it.
@@ -241,7 +244,7 @@ def start():
         # If the env var is not set it probably means the user ran the
         # truenas-api-conduit entrypoint directly.
         appenv_enum = core.AppEnv.STANDALONE
-        
+
         if log_level <= level_mapping["TRACE"]:
             raise ValueError("TRUENAS_APP_ENV environment variable is not set")
         else:
@@ -255,7 +258,9 @@ def start():
         raise ValueError("Tried running app with no app_env set")
 
     try:
-        asyncio.run(main(cfg), debug=(level_name.lower() == "trace"))
+        asyncio.run(
+            main(cfg), debug=(level_name.lower() == "trace"), loop_factory=loop_factory
+        )
     except OSError as e:
         #! im not 100% sure this is necessary here
         # If we got an OSError or other exception at this point then either

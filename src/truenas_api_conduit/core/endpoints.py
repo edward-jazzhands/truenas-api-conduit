@@ -7,7 +7,6 @@ import sys
 from enum import Enum
 from typing import TYPE_CHECKING
 
-
 if TYPE_CHECKING:
     # ws_client contains the import for the websockets library so we gain
     # a little bit by making it a lazy import when its needed.

@@ -55,6 +55,7 @@ def make_success_panel(msg: str, title: str = "Success") -> Panel:
     msg = "[default]" + msg
     return Panel(msg, title=title, title_align="left", style="bright_green")
 
+
 def require_tty(prompt_description: str, additional: str = "") -> None:
     if not sys.stdin.isatty():
         console_stderr.print(
@@ -63,6 +64,7 @@ def require_tty(prompt_description: str, additional: str = "") -> None:
         if additional:
             console_stderr.print(additional)
         sys.exit(1)
+
 
 def logging_setup(ctx: click.RichContext) -> None:
 
@@ -248,8 +250,9 @@ def _pydantic_error_panel(e: ValidationError) -> None:
             err_string += field_help_dict[field_name]
     err_string += (
         f"\n\n[default]You can use the [{COLORS.command}]config[default] "
-        f"and [{COLORS.command}]config-path[default] commands to edit/find your "
-        "config file"
+        f"and [{COLORS.command}]config -p[default] commands to edit/find your "
+        f"config file.\nUse the [{COLORS.command}]env[default] command to see "
+        "the program's environment variables and their current values"
     )
     console_stderr.print(make_usage_error_panel(err_string, "Configuration Errors"))
 

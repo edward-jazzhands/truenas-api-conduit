@@ -59,12 +59,15 @@ def get_service_manager(platform: core.Platform) -> BaseService:
     match platform:
         case core.Platform.LINUX:
             from truenas_api_conduit.service.linux import LinuxService
+
             return LinuxService()
         case core.Platform.WINDOWS:
             from truenas_api_conduit.service.windows import WindowsService
+
             return WindowsService()
         case core.Platform.MACOS:
             from truenas_api_conduit.service.macos import MacOSService
+
             return MacOSService()
         case _:
             assert_never(platform)
