@@ -1,0 +1,17 @@
+.git
+.gitignore
+.github
+.vscode
+.venv
+__pycache__
+*.pyc
+*_cache
+dist
+build
+tests
+docs
+notes
+plans
+Justfile
+LICENSE
+README.md

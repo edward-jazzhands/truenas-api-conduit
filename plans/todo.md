@@ -1,11 +1,24 @@
+[ ] Add support for having more than one TrueNAS API key (Big project, probably a 2.0 thing)
 [X] Get service install working on Linux
 [ ] Get service install working on Mac
 [ ] Get service install working on Windows
-[ ] Write first version of dockerfile for the containerized service
-[ ] Integrate systemd-python for better service integration in the service
+[X] Write first version of dockerfile for the containerized service
+[ ] Upload/release to PyPI and Github
+[ ] Upload Docker image to Docker Hub
+[ ] Upload to Homebrew
+[ ] Create a .deb package (Debian)
+[ ] Create a .rpm package (Fedora)
+[ ] Create a .pkg.tar.zst package (Arch)
+[ ] Create submission for TrueNAS App Marketplace
+[?] Integrate systemd-python for better service integration in the service
 [ ] Write unit tests for everything
-[ ] Add an env command to the CLI to see all env vars and which are currently set
+[ ] Add support for docker Secrets
+[ ] Finish process of moving the settings.toml file to exterior assets
+[ ] Get all commands working with docker version
+[ ] Implement the "start locked" feature
+[X] Add an env command to the CLI to see all env vars and which are currently set
 [ ] Add tracking of which versions of the TrueNAS API the current version is validated against (this should very rarely change)
+[X] Improve the completions command to be more robust and show the correct shell
 [X] write status options to separate/toggle OS status message passthrough
 [X] Create logs command to print the system logs on the base class and services
 [X] Improve log streaming and piping to less/lnav

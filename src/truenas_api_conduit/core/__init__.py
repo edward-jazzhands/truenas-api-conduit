@@ -2,6 +2,7 @@
 from typing import Final
 from pathlib import Path
 import sys
+import os
 from enum import Enum, StrEnum
 
 # third party
@@ -79,13 +80,19 @@ SLASH: Final[str] = "/" if PLATFORM == Platform.LINUX else "\\"
 # standard practice for cross-platform apps with a user-editable config file.
 # For Linux we follow the XDG Base Directory specification instead.
 
+XDG_CONFIG_HOME: Final[Path] = (
+    Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
+)
+
+PKG_CONFIG_FILE: Final[str] = "config.toml"
+
 CONFIG_DIR: Final[Path] = (
-    Path.home() / ".config" / APP_NAME
+    XDG_CONFIG_HOME / APP_NAME
     if PLATFORM == Platform.LINUX
     else Path.home() / APP_NAME
 )
 
-CONFIG_FILE_NAME: Final[str] = "settings.conf"
+CONFIG_FILE_NAME: Final[str] = "truenas-api.conf"
 CONFIG_PATH: Final[Path] = CONFIG_DIR / CONFIG_FILE_NAME
 
 
@@ -101,7 +108,7 @@ STORAGE_DIR: Final[Path] = Path(platformdirs.user_data_dir(APP_NAME))
 
 CRYPT_FILE_NAME: Final[str] = ".cryptkey"
 CRYPT_KEY_PATH: Final[Path] = CONFIG_DIR / CRYPT_FILE_NAME
-
+CRYPT_KEY_ENV: Final[str] = "TRUENAS_CRYPT_KEY"
 
 def ensure_storage_dir() -> None:
     _ensure_storage_dir(STORAGE_DIR)

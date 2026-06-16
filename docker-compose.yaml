@@ -1,0 +1,72 @@
+name: truenas-api-conduit
+
+services:
+  truenas-api-conduit:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    read_only: true
+    #! enable this whenever its done and uploaded:
+    # image: edward-jazzhands/truenas-api-conduit:latest
+    hostname: truenas-api-conduit
+    container_name: truenas-api-conduit
+    user: "${UID:-1000}:${GID:-1000}"
+    secrets:
+      - truenas_api_key
+    tmpfs:
+      - /tmp
+    volumes:
+      # config volume is for config, .cryptkey, and cert file.
+      # This should be a bind mount to a directory on your host machine.
+      - ./config:/home/appuser/.config/truenas-api-conduit
+      # storage volume is for persisting encrypted secrets with the
+      # built in file encrypter. This is not used if you set your API key
+      # in the config file or as an environment variable.
+      - truenas_api_conduit_storage:/home/appuser/.local/share/truenas-api-conduit
+      
+      # NOTE: If you pass through the required config values as env vars,
+      # you can also run the container without using any volumes. See the
+      # documentation for more info.
+    environment:
+      TZ: America/Los_Angeles
+      # This MUST be set to 0.0.0.0 to access the service from outside the container"
+      TRUENAS_SERVICE_ADDRESS: "0.0.0.0"
+      TRUENAS_HOST: ${TRUENAS_HOST}
+      # WARNING: Setting the API key as an env var is generally less secure
+      # than setting it in the config file. The most secure option is the
+      # crypt key file/env var, utilized by the set-key command in the CLI.
+      # see the documentation for more info.
+      TRUENAS_API_KEY: ${TRUENAS_API_KEY}
+      TRUENAS_CERT_PATH: ${TRUENAS_CERT_PATH}
+      TRUENAS_VALIDATE_CERTS: ${TRUENAS_VALIDATE_CERTS}
+      TRUENAS_LOG_LEVEL: ${TRUENAS_LOG_LEVEL}
+      TRUENAS_SOCKET_PORT: ${TRUENAS_SOCKET_PORT:-4567}
+      TRUENAS_API_ROUTE: ${TRUENAS_API_ROUTE}
+      TRUENAS_REQUEST_HEADER: ${TRUENAS_REQUEST_HEADER}
+      TRUENAS_CRYPT_KEY: ${TRUENAS_CRYPT_KEY}
+    ports:
+      - ${TRUENAS_SOCKET_PORT:-4567}:${TRUENAS_SOCKET_PORT:-4567}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+    # networks:
+    #   - truenas-api-conduit
+
+secrets:
+  truenas_api_key:
+    file: /home/user/secrets/truenas_key.txt  # path to host file
+
+# NOTE: You can use an external docker network to restrict access to this
+# service to only other containers on the same network. This can be very
+# useful for security and isolation. Combine this with a read-only
+# API key for maximum security.
+
+# networks:
+#   truenas-api-conduit:
+#     name: truenas-api-conduit

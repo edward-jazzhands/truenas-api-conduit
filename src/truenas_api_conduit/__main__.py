@@ -59,20 +59,20 @@ if sys.platform != "win32":
 # https://click.palletsprojects.com/en/stable/advanced/#callbacks
 
 # Normally option callbacks are used for validation and similar tasks.
-# I'm using them in a somewhat unconventional manner here, which is to grab
-# individual options the user passed in through the CLI and set them as attributes
-# on the CLIOptions dataclass.
-# The reason for this is entirely because of wanting to have "shared options".
-# Normally Click is designed so that shared options would need to be passed in
+# I'm using them here to perform the "global options" decorator pattern/hack.
+# It's a fairly well known workaround in the Click community for this problem.
+
+# Normally Click is designed so that global options would need to be passed in
 # to the main command, with subcommands coming *after* the options, like this:
-#    $ truenas-api --api-key=1234567890 start
+#    $ truenas-api -vv request some.request -fmt
 
-# This, I believe, is awkward and not how most other CLI frameworks handle this.
-# Instead I want these options to be available to all subcommands, like this:
-#    $ truenas-api start --api-key=1234567890
+# This is awkward and not how most other CLI frameworks handle this.
+# Instead we want it to be possible to chuck global options at the end of the
+# command, like this:
+#    $ truenas-api request some.request -fmt -vv
 
-# In order to achieve this, we need to use these callbacks combined with custom
-# option group decorators (below), which we can then re-use across subcommands.
+# In order to achieve this, we need to use these callbacks combined with a common
+# option group decorator (below), which we can then re-use across subcommands.
 # I researched all the possible ways to solve this problem, and this seems to be
 # the most recommended one.
 
@@ -80,6 +80,12 @@ if sys.platform != "win32":
 
 # NOTE: Because these are global options, they will actually run more than once
 # on subcommands. This is unfortunately necessary for this pattern to work.
+# The reason for this is we need to put the common options decorator on the main
+# command of the entire program (cli() function) so that they also show up at
+# the bottom of the main help menu. Otherwise they'll only show up in the help
+# menus for individual subcommands, which is not good UX. This solves the problem,
+# but it adds a new problem of these options being set twice.
+
 # So in order to prevent that from being an issue, these options will do a
 # check to see if the value was already set. If so it will not overwrite it.
 
@@ -179,6 +185,7 @@ config_commands = [
     "config",
     "set_key",
     "completions",
+    "env",
 ]
 
 help_commands = [
@@ -217,23 +224,14 @@ def cli(ctx: click.RichContext) -> None:
     ctx.ensure_object(CLIOptions)
 
     # NOTE: having the common_options decorator on the main group means those
-    # options are visible in the main help menu which is important for UX. It
-    # also means a user can apply a global option to the main command
-    # (as you can typically do with Click-based apps), like so:
-    #    1) >>> truenas-api -vv start
-    # as well as:
-    #    2) >>> truenas-api start -vv
+    # options are visible in the main help menu which is important for UX. See
+    # the big comment near the top of this file for more info.
 
-    # Click normally forces passing global options to the main command (like #1)
-    # but my system allows you to additionally use style #2. The options will
-    # show up in the main help menu as well as the individual help menus for
-    # each command. Rich-Click helps a lot for making this look nice with
-    # the command_panel decorators (above).
-
-    # However, the setup functions (logging_setup, config_setup) cannot be
+    # The setup functions (logging_setup, config_setup) cannot be
     # run here, because they would not catch options that were passed into
     # the subcommands. If global options are set on the main command, they'll
-    # be passed through so that the subcommand setup gets the full context.
+    # be passed through in the click context, so that the subcommand gets
+    # the full context when it does the setups.
 
 
 start_help_short = """Tell your OS to start the conduit service"""
@@ -677,16 +675,18 @@ def request(
     else:
         ctx.console.print(response.text, soft_wrap=True)
 
-direct_help = """Send the stop request directly to the service,
+stop_help = """Stop the conduit service. This will detect if its running
+as an OS service or in standalone mode and send the stop request accordingly"""
+
+stop_direct_help = """Force the stop request to go directly to the service,
 bypassing the OS service manager (only relevant if installed, standalone
 mode does this automatically)"""
 
-@cli.command()
-@click.option("-d", "--direct", is_flag=True, default=False, help=direct_help)
+@cli.command(help=stop_help)
+@click.option("-d", "--direct", is_flag=True, default=False, help=stop_direct_help)
 @common_options
 @click.pass_context
 def stop(ctx: click.RichContext, direct: bool = False) -> None:
-    """Stop the conduit service"""
 
     logging_setup(ctx)
     assert ctx.console is not None
@@ -763,16 +763,18 @@ def stop(ctx: click.RichContext, direct: bool = False) -> None:
         assert_never(detect)
 
 
-direct_help = """Send the restart request directly to the service,
+restart_help = """Restart the conduit service. This will detect if its running
+as an OS service or in standalone mode and send the restart request accordingly"""
+
+restart_direct_help = """Force the restart request to go directly to the service,
 bypassing the OS service manager (only relevant if installed, standalone
 mode does this automatically)"""
 
-@cli.command()
-@click.option("-d", "--direct", is_flag=True, default=False, help=direct_help)
+@cli.command(help=restart_help)
+@click.option("-d", "--direct", is_flag=True, default=False, help=restart_direct_help)
 @common_options
 @click.pass_context
 def restart(ctx: click.RichContext) -> None:
-    """Restart the conduit service"""
 
     logging_setup(ctx)
     assert ctx.console is not None
@@ -942,10 +944,11 @@ logs_helps_short = """Read the system logs for the service (must be installed)""
 # the wording to make it applicable to Mac and Windows.
 
 logs_help = f"""Read the system logs for the service (must be installed).\n
-You can pipe this into a log viewer (such as 'lnav') to view the logs
+You can pipe this into a log viewer (such as 'lnav' or 'moor') to view the logs
 in real time (ie.: [{COLORS.command}]truenas-api logs -f | lnav[default]).\n
-Note that -f opens the system logger directly and will not have any color.
-Recommended to install a proper log viewer like `lnav`"""
+Note that -f opens the system logger directly and will not have any color or
+search capabilities. Recommended to install a proper log viewer TUI such as
+`lnav` or `moor`"""
 
 follow_help = """Follow/tail the log output (Note: This just runs the system logger
 directly, which is why it can be piped, but it has no color by itself)"""
@@ -1009,14 +1012,14 @@ is available on your system.\n
 If there is no keyring backend available (ie. you're running in some minimal or
 headless environment), the program will fall back to writing the API key to an
 encrypted file in your storage directory. If this happens, the program will
-look for the [{COLORS.envvar}]TRUENAS_CRYPT_KEY[default] environment variable.
+look for the [{COLORS.envvar}]{core.CRYPT_KEY_ENV}[default] environment variable.
 If available, it will use that as the encryption key to avoid prompting you (thus
 making it possible to start the service through scripts/non-interactive environments).\n
 If this env var is NOT set, the program will prompt you for the encryption key
 when you run the
 [{COLORS.command}]set-key[default] command, as well as every time the service
 starts up. This would be unsuitable for starting at boot or other such automations
-[env: [{COLORS.envvar}]TRUENAS_CRYPT_KEY[default]=]
+[env: [{COLORS.envvar}]{core.CRYPT_KEY_ENV}[default]=]
 """
 
 delete_help = "Delete the API key from the current keyring backend."
@@ -1257,11 +1260,12 @@ def config(
             sys.exit(1)
 
 
-@cli.command()
+cheatsheet_help = """Print a cheatsheet showing how to do a bunch of commmon API requests"""
+
+@cli.command(help=cheatsheet_help)
 @common_options
 @click.pass_context
 def cheatsheet(ctx: click.RichContext) -> None:
-    """Print a cheatsheet showing how to do a bunch of commmon API requests"""
 
     logging_setup(ctx)
     assert ctx.console is not None
@@ -1312,12 +1316,12 @@ def reference(ctx: click.RichContext) -> None:
 
     ctx.console.print(f"https://{cfg.truenas_host}/api/docs/current")
 
+version_help = """Print the version of the TrueNAS API Conduit service"""
 
-@cli.command()
+@cli.command(help=version_help)
 @common_options
 @click.pass_context
 def version(ctx: click.RichContext) -> None:
-    """Print the version of the TrueNAS API Conduit service"""
 
     logging_setup(ctx)
     assert ctx.console is not None
@@ -1327,45 +1331,102 @@ def version(ctx: click.RichContext) -> None:
 
     ctx.console.print(f"{APP_NAME} {__version__}")
 
+completions_help = """Print the commands to enable tab completions in your shell
+(you can eval this)"""
 
-@cli.command()
+@cli.command(help=completions_help)
+@click.argument(
+    "shell", 
+    required=False, 
+    type=click.Choice(["bash", "zsh", "fish"], case_sensitive=False)
+)
 @common_options
 @click.pass_context
-def completions(ctx: click.RichContext) -> None:
-    "Print the commands to enable tab completions in your shell (you can eval this)"
-
-    #! consider changing to this:
-    # truenas-api bash | sudo tee /usr/share/bash-completion/completions/truenas-api
-    # truenas-api zsh | sudo tee /usr/share/zsh/site-functions/_truenas-api
-    # truenas-api tcsh | sudo tee /etc/profile.d/truenas-api.csh
-
-    # FIXME: This is probably not guaranteed to work on all platforms
-
+def completions(ctx: click.RichContext, shell: str | None) -> None:
     assert ctx.console is not None
     ctx.console.no_color = True
 
+    # Track if the user explicitly provided the shell argument
+    user_provided_shell = shell is not None
+
+    # 1. Resolve target shell (Argument > Auto-detect > Fallback)
+    if not shell:
+        if shell_env := os.environ.get("SHELL"):
+            shell = shell_env.split("/")[-1].lower()
+        else:
+            shell = "bash"
+
+    # Ensure unsupported auto-detected shells gracefully fallback to bash
+    if shell not in ("bash", "zsh", "fish"):
+        shell = "bash"
+
+    # 2. Base Configuration (Defaults to Bash)
     command = "bash_source"
     eval_template1 = 'eval "$(_TRUENAS_API_COMPLETE={command} truenas-api)"'
-    eval_template2 = (
-        'eval "$(_TRUENAS_API_CONDUIT_COMPLETE={command} truenas-api-conduit)"'
-    )
+    eval_template2 = 'eval "$(_TRUENAS_API_CONDUIT_COMPLETE={command} truenas-api-conduit)"'
+    
+    # 3. Adjust for specific shells
+    if shell == "zsh":
+        command = "zsh_source"
+    elif shell == "fish":
+        command = "fish_source"
+        eval_template1 = "_TRUENAS_API_COMPLETE={command} truenas-api | source"
+        eval_template2 = "_TRUENAS_API_CONDUIT_COMPLETE={command} truenas-api-conduit | source"
 
-    if shell_env := os.environ.get("SHELL"):
-        shell = shell_env.split("/")[-1]
-        if shell == "zsh":
-            command = "zsh_source"
-        elif shell == "fish":
-            command = "source"
-            eval_template1 = "_TRUENAS_API_COMPLETE={command} truenas-api | source"
-            eval_template2 = (
-                "_TRUENAS_API_CONDUIT_COMPLETE={command} truenas-api-conduit | source"
-            )
-
+    # Print the raw completion script triggers
     ctx.console.print(eval_template1.format(command=command))
     ctx.console.print(eval_template2.format(command=command))
 
+    # 4. Generate dynamic tip based on the resolved shell
+    # If the user passed the shell manually, include it in the tip's instruction
+    shell_suffix = f" {shell}" if user_provided_shell else ""
+    
+    if shell == "fish":
+        eval_instruction = f"truenas-api completions{shell_suffix} | source"
+    else:
+        eval_instruction = f"eval $(truenas-api completions{shell_suffix})"
+
     console_stderr.print(
-        f"[italic]Tip: You can eval this command to enable tab completions:[/italic]"
-        f"""  [{COLORS.command}]eval $(truenas-api completions)""",
+        "\n[italic]Note: the truenas-api command is the same thing as "
+        "the truenas-api-conduit command, just shorter.\n\n"
+        "You can run this command to enable tab completions "
+        f"(detected shell: {shell}):[/italic]\n"
+        f"[{COLORS.command}]{eval_instruction}[default]",
         markup=True,
     )
+
+env_help = """Print out a list of all environment variables which can be used by
+the service, and their current values"""
+
+@cli.command(help=env_help)
+@common_options
+@click.pass_context
+def env(ctx: click.RichContext) -> None:
+
+    logging_setup(ctx)
+    assert ctx.console is not None
+
+    env_vars: dict[str, str | None] ={
+        "TRUENAS_HOST": None,
+        "TRUENAS_API_KEY": None,
+        "TRUENAS_CERT_PATH": None,
+        "TRUENAS_VALIDATE_CERTS": None,
+        "TRUENAS_LOG_LEVEL": None,
+        "TRUENAS_SOCKET_PORT": None,
+        "TRUENAS_SERVICE_ADDRESS": None,
+        "TRUENAS_API_ROUTE": None,
+        "TRUENAS_REQUEST_HEADER": None,
+        "TRUENAS_CRYPT_KEY": None,
+        "RICH_CLICK_THEME": None,
+        "NO_COLOR": None,
+        "EDITOR": None,
+    }
+
+    for k, v in os.environ.items():
+        if k in env_vars:
+            env_vars[k] = v
+
+    # ctx.console.print(env_vars)
+    for k, v in env_vars.items():
+        ctx.console.print(f"{k}: {v}")
+

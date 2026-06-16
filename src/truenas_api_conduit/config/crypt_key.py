@@ -1,5 +1,5 @@
 # standard library
-from typing import assert_never
+from typing import Final
 import os
 import logging
 
@@ -9,10 +9,12 @@ from truenas_api_conduit.console import console_stderr
 import click
 
 # project
-from truenas_api_conduit.core import CONFIG_DIR, CRYPT_KEY_PATH, CRYPT_FILE_NAME, SLASH
+from truenas_api_conduit.core import CONFIG_DIR, CRYPT_KEY_PATH, CRYPT_FILE_NAME, SLASH, CRYPT_KEY_ENV
 from truenas_api_conduit import COLORS
 
 log = logging.getLogger(__name__)
+
+
 
 # NOTE: the crypt_key_callback is a function which  provides a way for the
 # FileEncrypter keyring backend to get the crypt_key value from a user prompt
@@ -46,7 +48,7 @@ def store_crypt_key(v: SecretStr) -> bool | None:
         "To start the service automatically (ie. at login), you'll need to "
         "get this encryption key into the program. You can do this by:\n"
         f"  1. Setting the environment variable "
-        f"\\[env: [{COLORS.envvar}]TRUENAS_CRYPT_KEY[default]=] "
+        f"\\[env: [{COLORS.envvar}]{CRYPT_KEY_ENV}[default]=] "
         "(ensure it is set before the service starts)\n"
         f"  2. Creating a file named [{COLORS.envvar}]{CRYPT_FILE_NAME}[default] "
         "in your config directory containing the encryption key "
@@ -67,10 +69,10 @@ def store_crypt_key(v: SecretStr) -> bool | None:
 
 def get_crypt_key() -> SecretStr | None:
 
-    crypt_key = os.environ.get("TRUENAS_CRYPT_KEY")
+    crypt_key = os.environ.get(CRYPT_KEY_ENV)
     if crypt_key is not None:
         crypt_key = SecretStr(crypt_key)
-        log.debug("Found TRUENAS_CRYPT_KEY in env: %s", crypt_key)
+        log.debug("Found {CRYPT_KEY_ENV} in environment: %s", crypt_key)
     else:
         if CRYPT_KEY_PATH.exists():
             try:

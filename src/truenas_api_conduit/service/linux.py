@@ -24,11 +24,8 @@ from truenas_api_conduit.console import console_stdout  # , console_stderr
 log = logging.getLogger(__name__)
 
 UNIT_NAME: Final[str] = f"{APP_NAME}.service"
-SYSTEMD_USER_DIR: Final[Path] = (
-    Path(os.environ.get("XDG_CONFIG_HOME", str(Path.home() / ".config")))
-    / "systemd"
-    / "user"
-)
+
+SYSTEMD_USER_DIR: Final[Path] = core.XDG_CONFIG_HOME / "systemd" / "user"
 UNIT_FILE = SYSTEMD_USER_DIR / UNIT_NAME
 
 __all__ = [

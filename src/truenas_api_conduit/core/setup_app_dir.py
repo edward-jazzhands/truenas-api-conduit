@@ -3,6 +3,8 @@ from pathlib import Path
 import shutil
 import logging
 
+from truenas_api_conduit.core import PKG_CONFIG_FILE
+
 
 def ensure_config(CONFIG_DIR: Path, CONFIG_PATH: Path) -> None:
 
@@ -20,7 +22,7 @@ def ensure_config(CONFIG_DIR: Path, CONFIG_PATH: Path) -> None:
     if not CONFIG_PATH.exists():
         from importlib.resources import files, as_file
 
-        with as_file(files("truenas_api_conduit").joinpath("settings.toml")) as path:
+        with as_file(files("truenas_api_conduit").joinpath(PKG_CONFIG_FILE)) as path:
             log.debug(f"Found default config file at {path}")
             log.debug(f"Copying default config file to {CONFIG_PATH}...")
             try:

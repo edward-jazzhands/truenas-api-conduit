@@ -19,7 +19,7 @@ from pydantic import SecretStr
 
 # project
 from truenas_api_conduit.errors import ConduitError
-from truenas_api_conduit.core import STORAGE_DIR, CRYPT_FILE_NAME
+from truenas_api_conduit.core import STORAGE_DIR, CRYPT_FILE_NAME, CRYPT_KEY_ENV
 from truenas_api_conduit.console import console_stderr
 from truenas_api_conduit import COLORS
 from truenas_api_conduit.config.crypt_key import get_crypt_key
@@ -73,7 +73,7 @@ class FileEncrypter(KeyringBackend):
             "Using the file encrypter keyring backend. This is selected when "
             "there is no other keyring backend available. You will be prompted "
             "to enter an encryption key to store and retrieve your API key.\n"
-            f"You can also set the [{COLORS.envvar}]TRUENAS_CRYPT_KEY[default] environment "
+            f"You can also set the [{COLORS.envvar}]{CRYPT_KEY_ENV}[default] environment "
             f"variable or create a [{COLORS.envvar}]{CRYPT_FILE_NAME}[default] file to avoid this "
             f"prompt. The [{COLORS.command}]set-key[default] command in the CLI will "
             f"offer to create a {CRYPT_FILE_NAME} file for you"
