@@ -24,6 +24,7 @@ class ServerConfig:
     port: int
     request_header: str | None = None
 
+
 @dataclass
 class RawResponse:
     status: int
@@ -99,6 +100,7 @@ class RequestHelper:
             sys.exit(1)
 
         return RawResponse(status=status, text=text)
+
 
 def auto_find_server_config(
     lock_dict: dict[str, Any] | None, lock_file_bad: bool = False

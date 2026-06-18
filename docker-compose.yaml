@@ -11,8 +11,17 @@ services:
     hostname: truenas-api-conduit
     container_name: truenas-api-conduit
     user: "${UID:-1000}:${GID:-1000}"
-    secrets:
-      - truenas_api_key
+    ports:
+      - ${TRUENAS_SOCKET_PORT:-4567}:${TRUENAS_SOCKET_PORT:-4567}
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
     tmpfs:
       - /tmp
     volumes:
@@ -44,23 +53,25 @@ services:
       TRUENAS_API_ROUTE: ${TRUENAS_API_ROUTE}
       TRUENAS_REQUEST_HEADER: ${TRUENAS_REQUEST_HEADER}
       TRUENAS_CRYPT_KEY: ${TRUENAS_CRYPT_KEY}
-    ports:
-      - ${TRUENAS_SOCKET_PORT:-4567}:${TRUENAS_SOCKET_PORT:-4567}
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    deploy:
-      resources:
-        limits:
-          cpus: "1"
-          memory: 512M
+    # secrets:
+    #   - source: truenas_api_key
+    #     target: /run/secrets/truenas_api_key
+    #     mode: 0444
+    # secrets:
+    #   - source: truenas_crypt_key
+    #     target: /run/secrets/truenas_crypt_key
+    #     mode: 0444
     # networks:
     #   - truenas-api-conduit
 
-secrets:
-  truenas_api_key:
-    file: /home/user/secrets/truenas_key.txt  # path to host file
+
+# NOTE: write secrets note
+
+# secrets:
+#   truenas_api_key:
+#     file: "${SECRETS_DIR}/truenas_api_key"
+#   truenas_crypt_key:
+#     file: "${SECRETS_DIR}/truenas_crypt_key"
 
 # NOTE: You can use an external docker network to restrict access to this
 # service to only other containers on the same network. This can be very

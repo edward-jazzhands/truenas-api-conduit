@@ -1,6 +1,13 @@
 # standard library
-from typing import Any
+from typing import Any, TYPE_CHECKING
+from pathlib import Path
 import logging
+
+if TYPE_CHECKING:
+    from pydantic_settings import PydanticBaseSettingsSource, DotEnvSettingsSource
+    from pydantic import (
+        FieldSerializationInfo,
+    )
 
 # third party
 import keyring
@@ -9,28 +16,27 @@ from pydantic import (
     field_serializer,
     Field,
     SecretStr,
-    FieldSerializationInfo,
 )
 from pydantic_settings import (
     BaseSettings,
-    PydanticBaseSettingsSource,
     SettingsConfigDict,
     TomlConfigSettingsSource,
     EnvSettingsSource,
     InitSettingsSource,
+    SecretsSettingsSource,
 )
 
 # project
 from truenas_api_conduit import log_setup, APP_NAME
+from truenas_api_conduit.app_globals import app_globals
 from truenas_api_conduit.console import set_no_color
 from truenas_api_conduit.core import CONFIG_PATH
 from truenas_api_conduit.config.keyring_source import (
     KeyringSettingsSource,
     KeyringField,
 )
-from truenas_api_conduit.app_globals import app_globals
 
-__all__ = ["Config"]
+__all__ = ["Config", "AppBaseConfig"]
 
 log = logging.getLogger(__name__)
 
@@ -90,9 +96,100 @@ class TrackingKeyringSource(TrackingSourceMixin, KeyringSettingsSource):
     source_label = "keyring"
 
 
-class Config(BaseSettings):
+class TrackingSecretsSource(TrackingSourceMixin, SecretsSettingsSource):
+    source_label = "secrets"
+
+
+secrets_dir = Path("/run/secrets")
+
+
+class AppBaseConfig(BaseSettings):
     model_config = SettingsConfigDict(
+        extra="ignore",
         toml_file=CONFIG_PATH,
+        secrets_dir=secrets_dir if secrets_dir.exists() else None,
+        env_file_encoding="utf-8",
+        env_prefix="TRUENAS_",
+        frozen=app_globals.is_config_frozen,
+        validate_by_name=True,  # <- This is the new and recommended way
+        validate_by_alias=True,
+        # populate_by_name=True, # ! Deprecated - Not recommended in v2.11+
+    )
+
+    @classmethod
+    def settings_customise_sources(  # type: ignore
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: InitSettingsSource,  # <- type checkers don't like this but its fine
+        env_settings: EnvSettingsSource,  # same here
+        dotenv_settings: DotEnvSettingsSource,
+        file_secret_settings: SecretsSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+
+        # if the API key was passed in from the CLI then we skip the keyring
+        init_processed = init_settings()
+        skip = False
+        if init_processed.get("api_key"):
+            log.debug("Found API key in init kwargs. Skipping keyring")
+            skip = True
+        else:
+            # my custom fallback file encrypter keyring backend. This is set to
+            # lowest priority (0.0) so that it should only be used if no other
+            # keyring backends are available.
+            from truenas_api_conduit.config.file_encrypter import FileEncrypter
+
+            keyring.set_keyring(FileEncrypter(init_processed.get("crypt_key")))
+
+        # Priority follows the order of the tuple:
+        # 1. CLI flags passed into constructor
+        # 2. Keyring/Secrets Manager
+        # 3. Environment variables
+        # 4. Config file
+        # 5. File secrets (mostly for Docker secrets but not exclusively)
+        # 6. Config class defaults
+        return (
+            TrackingInitSource(settings_cls, init_processed),
+            TrackingKeyringSource(settings_cls, service=APP_NAME, skip=skip),
+            TrackingEnvSource(settings_cls),
+            TrackingTomlSource(settings_cls),
+            TrackingSecretsSource(settings_cls),
+        )
+
+    # These 5 fields are the only ones needed to start up the aiohttp
+    # server. This allows it to start up independently of putting in
+    # the API key and other host config vars.
+
+    log_level: str = "warning"
+    no_color: bool = Field(default=False, validation_alias="NO_COLOR")
+    socket_port: int = 4567
+    service_address: str = "localhost"
+    request_header: str | None = None
+    stealth_mode: bool = False
+
+    @field_validator("log_level")
+    @classmethod
+    def validate_log_level(cls, v: str) -> str:
+        valid = {"trace", "debug", "info", "warning", "error", "critical"}
+        if v.lower() not in valid:
+            raise ValueError(f"log_level must be one of {valid}, got {v!r}")
+        return v.lower()
+
+    def model_post_init(self, _context: Any) -> None:
+
+        log_mapping = logging.getLevelNamesMapping()
+        log_setup.set_log_level(log_mapping[self.log_level.upper()])
+        log.info("Config post init: log_level set to %s", self.log_level)
+
+        if self.no_color:
+            log.info("Config post init: Disabling color output")
+            set_no_color()
+
+
+class Config(AppBaseConfig):
+    model_config = SettingsConfigDict(
+        extra="forbid",
+        toml_file=CONFIG_PATH,
+        secrets_dir=secrets_dir if secrets_dir.exists() else None,
         env_file_encoding="utf-8",
         env_prefix="TRUENAS_",
         frozen=app_globals.is_config_frozen,
@@ -103,43 +200,6 @@ class Config(BaseSettings):
 
     # pydantic-settings sources docs:
     # https://pydantic.dev/docs/validation/latest/concepts/pydantic_settings/#other-settings-source
-
-    @classmethod
-    def settings_customise_sources(  # type: ignore
-        cls,
-        settings_cls: type[BaseSettings],
-        init_settings: InitSettingsSource,  # <- type checkers don't like this but its fine
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,
-        file_secret_settings: PydanticBaseSettingsSource,
-    ) -> tuple[PydanticBaseSettingsSource, ...]:
-
-        # if the API key was passed in from the CLI then we skip the keyring
-        skip = False
-        api_key = init_settings.init_kwargs.get("api_key")
-        if api_key is not None:
-            log.debug("Found API key in init kwargs. Skipping keyring")
-            skip = True
-        else:
-            from truenas_api_conduit.config.file_encrypter import FileEncrypter
-
-            # my custom fallback file encrypter keyring backend. This is set to
-            # lowest priority (0.0) so that it should only be used if no other
-            # keyring backends are available.
-            keyring.set_keyring(FileEncrypter())
-
-        # Priority follows the order of the tuple:
-        # 1. CLI flags passed into constructor
-        # 2. Keyring/Secrets Manager
-        # 3. Environment variables
-        # 4. Config file
-        # 5. Config class defaults
-        return (
-            TrackingInitSource(settings_cls, init_settings.init_kwargs),
-            TrackingKeyringSource(settings_cls, service=APP_NAME, skip=skip),
-            TrackingEnvSource(settings_cls),
-            TrackingTomlSource(settings_cls),
-        )
 
     # NOTE: Because we have env_settings in the sources, Pydantic will look for
     # env variables with the same name as each field, with the env_prefix="TRUENAS_".
@@ -164,11 +224,7 @@ class Config(BaseSettings):
     validate_certs: bool = True
     api_key: SecretStr = KeyringField(default=...)  # custom field function
     api_route: str = "/api/current"
-    log_level: str = "warning"
-    no_color: bool = Field(default=False, validation_alias="NO_COLOR")
-    socket_port: int = 4567
-    service_address: str = "localhost"
-    request_header: str | None = None
+    crypt_key: SecretStr | None = Field(default=None)
 
     # Internal settings
 
@@ -191,17 +247,23 @@ class Config(BaseSettings):
             return secret.get_secret_value()
         return secret
 
-    @field_validator("log_level")
-    @classmethod
-    def validate_log_level(cls, v: str) -> str:
-        valid = {"trace", "debug", "info", "warning", "error", "critical"}
-        if v.lower() not in valid:
-            raise ValueError(f"log_level must be one of {valid}, got {v!r}")
-        return v.lower()
+    @field_serializer("crypt_key")
+    def serialize_crypt_key(self, secret: SecretStr, info: FieldSerializationInfo):
+        if (
+            info.context
+            and info.context.get("unmask") is True
+            and self.crypt_key is not None
+        ):
+            return secret.get_secret_value()
+        return secret
 
     @field_validator("truenas_host", mode="before")
     @classmethod
     def truenas_host_missing(cls, v: str) -> str:
+        # NOTE: validators that check if the value has been set at all
+        # need to have the before mode in order to show the use our
+        # custom ValueError, otherwise it would just show the default
+        # pedantic error
         if not v:
             raise ValueError(
                 "You need to set a value for your TrueNAS server's address. You can set "
@@ -212,7 +274,7 @@ class Config(BaseSettings):
             )
         return v
 
-    @field_validator("truenas_host", mode="after")
+    @field_validator("truenas_host")
     @classmethod
     def truenas_host_used_placeholder(cls, v: str) -> str:
         if v == "192.168.1.xxx:443":
@@ -224,7 +286,7 @@ class Config(BaseSettings):
             )
         return v
 
-    @field_validator("truenas_host", mode="after")
+    @field_validator("truenas_host")
     @classmethod
     def truenas_host_clean_prefix(cls, v: str) -> str:
         if v.startswith("http://"):
@@ -260,13 +322,7 @@ class Config(BaseSettings):
 
     def model_post_init(self, _context: Any) -> None:
 
-        log_mapping = logging.getLevelNamesMapping()
-        log_setup.set_log_level(log_mapping[self.log_level.upper()])
-        log.info("Config post init: log_level set to %s", self.log_level)
-
-        if self.no_color:
-            log.info("Config post init: Disabling color output")
-            set_no_color()
+        super().model_post_init(_context)
 
         for field, value in Config.model_fields.items():
             if field not in self.provenance:

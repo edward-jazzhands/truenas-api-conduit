@@ -74,7 +74,8 @@
 # Set to true to disable color output. This is equivalent to using the
 # --no-color flag on the CLI. NOTE: this does not affect the help menus.
 # To disable color in the help menus, set the environment variable to anything.
-# This env var is a common convention and may affect other programs.
+# This is read directly by the program CLI framework (Rich-Click) as well as this
+# program. This env var is a common convention and may affect other programs.
 #     Default: false
 #     Equivalent Environment Var: NO_COLOR
 
@@ -117,5 +118,17 @@
 #     Equivalent Environment Var: TRUENAS_REQUEST_HEADER
 
 # request_header = "My Request Header"
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+# In stealth mode, if the service is either locked or has a required
+# request header, it will return a generic 404 response instead of
+# a helpful error message. This can add an extra layer of security
+# because if someone is somehow able to snoop on your open ports,
+# they can't tell if the service is running or not.
+#     Default: false
+#     Equivalent Environment Var: TRUENAS_REQUEST_HEADER
+
+# stealth_mode = false
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

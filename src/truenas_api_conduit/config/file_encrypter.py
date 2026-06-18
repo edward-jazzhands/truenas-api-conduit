@@ -9,6 +9,7 @@ import logging
 from enum import Enum
 
 # third party
+import click
 from jaraco.classes import properties
 from keyring.backend import KeyringBackend
 from keyring.errors import PasswordDeleteError, PasswordSetError, KeyringError
@@ -19,10 +20,16 @@ from pydantic import SecretStr
 
 # project
 from truenas_api_conduit.errors import ConduitError
-from truenas_api_conduit.core import STORAGE_DIR, CRYPT_FILE_NAME, CRYPT_KEY_ENV
+from truenas_api_conduit.core import (
+    STORAGE_DIR,
+    CONFIG_DIR,
+    CRYPT_KEY_PATH,
+    CRYPT_FILE_NAME,
+    SLASH,
+    CRYPT_KEY_ENV,
+)
 from truenas_api_conduit.console import console_stderr
 from truenas_api_conduit import COLORS
-from truenas_api_conduit.config.crypt_key import get_crypt_key
 
 SECRETS_DIR: Final[Path] = STORAGE_DIR / "secrets"
 SALT_LENGTH: Final[int] = 16
@@ -66,8 +73,10 @@ class NotATTYError(KeyringError, ConduitError):
 
 class FileEncrypter(KeyringBackend):
 
-    def __init__(self):
+    def __init__(self, crypt_key: SecretStr | None = None):
+        "Ed's custom file encrypter keyring backend"
 
+        self.crypt_key = crypt_key
         self.help_message_shown: bool = False
         self.help_message = (
             "Using the file encrypter keyring backend. This is selected when "
@@ -116,10 +125,16 @@ class FileEncrypter(KeyringBackend):
         except Exception as e:
             log.error("Could not set password in keyring: %s", e)
             raise PasswordSetError(f"Could not set password in keyring: {e}") from e
+        else:
+            log.debug("Success: key set")
+            self.store_crypt_key()
+            self.crypt_key = None
 
     def get_password(self, service: str, username: str) -> str | None:
 
-        ALLOWED: Final[int] = 3
+        # if there was a crypt key set through init args (CLI), and its wrong,
+        # fail immediately. Otherwise 2 retries
+        ALLOWED: Final[int] = 3 if not self.crypt_key else 1
         attempts = 0
         while True:
             try:
@@ -183,14 +198,18 @@ class FileEncrypter(KeyringBackend):
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(), length=32, salt=salt, iterations=480000
         )
-        crypt_key = self._get_crypt_key(service, username)
+        if self.crypt_key:
+            crypt_key = self.crypt_key.get_secret_value()
+        else:
+            crypt_key = self._get_crypt_key(service, username)
+
         safebytes = base64.urlsafe_b64encode(kdf.derive(crypt_key.encode()))
         del crypt_key
         return safebytes
 
     def _get_crypt_key(self, service: str, username: str) -> str:
 
-        crypt_key = get_crypt_key()
+        crypt_key = self.get_crypt_key()
         if crypt_key is not None:
             log.warning("Found a stored encryption key, using it.")
             return crypt_key.get_secret_value()
@@ -246,3 +265,48 @@ class FileEncrypter(KeyringBackend):
             raise e
         else:
             assert_never(e.err_code)
+
+    def store_crypt_key(self) -> None:
+
+        if not self.crypt_key:
+            raise RuntimeError("Tried to store a crypt key but no key was set")
+
+        console_stderr.print(
+            "Do you want to store this encryption key in a file?\n"
+            "To start the service automatically (ie. at login), you'll need to "
+            "get this encryption key into the program. You can do this by:\n"
+            f"  1. Setting the environment variable "
+            f"\\[env: [{COLORS.envvar}]{CRYPT_KEY_ENV}[default]=] "
+            "(ensure it is set before the service starts)\n"
+            f"  2. Creating a file named [{COLORS.envvar}]{CRYPT_FILE_NAME}[default] "
+            "in your config directory containing the encryption key "
+            f"(set [{COLORS.command}]chmod 600[default])\n\n"
+            f"[default]On your machine, it would look for this file at: "
+            f"{CONFIG_DIR}{SLASH}{CRYPT_FILE_NAME}\n"
+            "Choosing yes will perform option 2 for you."
+        )
+        answer = click.prompt(f"Enter 'y' to create the {CRYPT_FILE_NAME} file")
+        if answer.lower() not in ("y", "yes"):
+            return
+
+        CRYPT_KEY_PATH.write_text(self.crypt_key.get_secret_value())
+        CRYPT_KEY_PATH.chmod(0o600)  # HACK: This won't do anything on windows.
+        console_stderr.print("Success: encryption key written to file")
+
+    @staticmethod
+    def get_crypt_key() -> SecretStr | None:
+
+        crypt_key = os.environ.get(CRYPT_KEY_ENV)
+        if crypt_key is not None:
+            crypt_key = SecretStr(crypt_key)
+            log.debug("Found {CRYPT_KEY_ENV} in environment: %s", crypt_key)
+        else:
+            if CRYPT_KEY_PATH.exists():
+                try:
+                    crypt_key = SecretStr(CRYPT_KEY_PATH.read_text())
+                except Exception as e:
+                    log.critical("Could not read crypt key file: %s", e)
+                    raise
+                else:
+                    log.debug("Found crypt key in file: %s", crypt_key)
+        return crypt_key

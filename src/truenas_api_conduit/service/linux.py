@@ -191,16 +191,15 @@ class LinuxService(BaseService):
         # so that it doesn't leave any leftover files or new directories
         # if the install fails for any reason.
 
-        systemd_unit_dir = SYSTEMD_USER_DIR
         try:
-            systemd_unit_dir.mkdir(parents=True, exist_ok=True)
+            SYSTEMD_USER_DIR.mkdir(parents=True, exist_ok=True)
         except OSError as e:
             err_string = core.examine_os_error(e)
             log.error("Failed to create systemd unit directory: %s", err_string)
             raise
-        console_stdout.print("Created systemd unit directory: %s", systemd_unit_dir)
+        console_stdout.print("Created systemd unit directory: %s", SYSTEMD_USER_DIR)
 
-        self.unit_path = systemd_unit_dir / UNIT_NAME
+        self.unit_path = SYSTEMD_USER_DIR / UNIT_NAME
         unit_content = build_unit_file(executable)
         console_stdout.print("Unit path: %s", self.unit_path)
 

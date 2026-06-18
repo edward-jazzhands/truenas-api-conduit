@@ -66,3 +66,7 @@ sync-tags:
 
 # sync-ci:
 #   curl -fsSL https://raw.githubusercontent.com/edward-jazzhands/ci-shared-python/main/sync.sh | bash
+
+# uses the one in ./config as the source of truth
+sync-configs:
+  cp ./config/config.toml ./src/truenas_api_conduit/config.toml

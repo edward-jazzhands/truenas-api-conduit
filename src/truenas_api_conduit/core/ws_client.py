@@ -56,11 +56,11 @@ class TrueNASClient:
 
     def __init__(
         self,
-        config: Config,
+        config: Config | None,
         loop: asyncio.AbstractEventLoop,
     ) -> None:
 
-        self.config: Config = config
+        self.config: Config | None = config
         "pydantic-settings Config object"
 
         self.loop: asyncio.AbstractEventLoop = loop
@@ -101,10 +101,19 @@ class TrueNASClient:
     # a clean separation of concerns and not allow errors to crash the
     # outer service (aiohttp), but rather just provide helpful messages.
 
-    def start(self) -> asyncio.Task:
+    def start(self, config: Config | None = None) -> asyncio.Task:
         "returns the created task"
         # NOTE: We need to store a reference of the task as a self attribute
         # so that it does not get garbage collected by python
+
+        if config:
+            self.config = config
+
+        if not self.config:
+            raise RuntimeError(
+                "Tried to start the client but the config object is not set"
+            )
+
         self.client_task = asyncio.create_task(self._start())
         return self.client_task
 
@@ -213,13 +222,13 @@ class TrueNASClient:
             "req_id": self.req_id,
             "websocket host": self.ws_conn._host if self.ws_conn else None,
             "websocket port": self.ws_conn._port if self.ws_conn else None,
-            "socket_port": self.config.socket_port,
+            "socket_port": self.config.socket_port if self.config else None,
             "websocket secure": self.ws_conn._secure if self.ws_conn else None,
-            "truenas_cert_path": self.config.truenas_cert_path,
-            "validate_certs": self.config.validate_certs,
-            "api_key": str(self.config.api_key),
-            "log_level": self.config.log_level,
-            "no_color": self.config.no_color,
+            "truenas_cert_path": self.config.truenas_cert_path if self.config else None,
+            "validate_certs": self.config.validate_certs if self.config else None,
+            "api_key": str(self.config.api_key) if self.config else None,
+            "log_level": self.config.log_level if self.config else None,
+            "no_color": self.config.no_color if self.config else None,
         }
 
     # NOTE: Just to refresh your brain on how this works if you're rusty, in a
@@ -231,6 +240,11 @@ class TrueNASClient:
     # and returns a future.
 
     async def call(self, payload: dict[str, Any]) -> dict[str, Any]:
+
+        if not self.config:
+            msg = "Tried to make a request but the config object is not set"
+            log.warning(msg)
+            return {"result": "LOCKED", "error": msg}
 
         if not self.ws_conn:
             msg = "Request received but client is not connected"
@@ -290,6 +304,10 @@ class TrueNASClient:
     # *-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+-+H+
     # INTERNAL METHODS BELOW
 
+    def _config_check(self, method: str) -> None:
+        if not self.config:
+            raise RuntimeError(f"Tried to run {method} but the config object is not set")
+
     # used in _connect and call()
     def _make_rpc_request(
         self,
@@ -325,6 +343,9 @@ class TrueNASClient:
     # used in start()
     async def _start(self) -> None:
         "runs for the lifetime of the app."
+
+        if not self.config:
+            raise RuntimeError("Tried to run _start but the config object is not set")
 
         while not self._closing:
             try:
@@ -371,6 +392,11 @@ class TrueNASClient:
         """False means something else has the reconnect flag set. True
         means it worked. Otherwise loops forver."""
 
+        if not self.config:
+            raise RuntimeError(
+                "Tried to run _connection_loop but the config object is not set"
+            )
+
         if self._reconnecting:  # only one at a time
             return False
         self._reconnecting = True
@@ -413,6 +439,11 @@ class TrueNASClient:
     # Used in _connect and in _get_websocket_conn
     async def _perform_conn_diag(self) -> ConnDiag:
 
+        if not self.config:
+            raise RuntimeError(
+                "Tried to run _perform_conn_diag but the config object is not set"
+            )
+
         results = {}
         # NOTE: These tests handle their own timeouts and return False if a timeout
         # is encountered, there should be no reason this can raise an error. They
@@ -425,6 +456,11 @@ class TrueNASClient:
 
     # Used in _connect
     async def _get_websocket_conn(self) -> client.WebSocketClientProtocol:
+
+        if not self.config:
+            raise RuntimeError(
+                "Tried to run _get_websocket_conn but the config object is not set"
+            )
 
         log.info("Starting _get_websocket_conn")
 
@@ -458,6 +494,11 @@ class TrueNASClient:
     # Used in _connect
     async def _error_handler(self, err_string: str, e: Exception):
 
+        if not self.config:
+            raise RuntimeError(
+                "Tried to run _error_handler but the config object is not set"
+            )
+
         # Setting _closing will cause the lifecycle task to exit the loop,
         # the task will then finish, triggering the callback to run the
         # close() method, do the cleanup, and then shutdown the program.
@@ -472,6 +513,9 @@ class TrueNASClient:
     # Used in _connection_loop
     async def _connect(self) -> None:
         "creates a new self.ws_conn object every time this runs"
+
+        if not self.config:
+            raise RuntimeError("Tried to run _connect but the config object is not set")
 
         try:
             self.ws_conn = await self._get_websocket_conn()

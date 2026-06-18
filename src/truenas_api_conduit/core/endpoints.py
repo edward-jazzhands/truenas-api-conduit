@@ -5,13 +5,14 @@ import logging
 import asyncio
 import sys
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     # ws_client contains the import for the websockets library so we gain
     # a little bit by making it a lazy import when its needed.
     from truenas_api_conduit.core.ws_client import TrueNASClient
-
+    from truenas_api_conduit.core.__main__ import Unlocker
+    from truenas_api_conduit.config import Config, AppBaseConfig
 
 # third party
 from aiohttp import web
@@ -34,27 +35,63 @@ class RequestHeader(Enum):
     CORRECT = 3
 
 
+STEALTH_RESPONSE: Final[web.Response] = web.Response(
+    text="<html><body>404 Not Found</body></html>", content_type="text/html", status=404
+)
+
 # <><><><> HELPERS <><><><>
 
 
-def check_request_header(request: web.Request) -> RequestHeader:
-    "Check if the request has the required header"
+def check_request_header(request: web.Request) -> None | web.Response:
+    """None = CORRECT | web.Response = INCORRECT"""
 
-    looking_for: str | None = request.app["config"].request_header
+    cfg: Config | AppBaseConfig = request.app["config"]
+    looking_for: str | None = cfg.request_header
 
     if looking_for is None:  # this means there is no required header
-        return RequestHeader.NONE
+        return
     else:
         if incoming_header := request.headers.get(APP_NAME):
             log.info("Found incoming header: %s", incoming_header)
             if incoming_header == looking_for:
-                return RequestHeader.CORRECT
+                return
             else:
-                log.warning("Request had the wrong header")
-                return RequestHeader.INCORRECT
+                log.warning(
+                    "Request had the correct header name, but the value was incorrect"
+                )
         else:
             log.warning("Request did not have the required header")
-            return RequestHeader.MISSING
+
+    if cfg.stealth_mode:
+        return STEALTH_RESPONSE
+    else:
+        return web.json_response(
+            {"error": "header was either missing or incorrect"}, status=400
+        )
+
+
+def check_locked_mode(request: web.Request) -> None | web.Response:
+    "None = UNLOCKED | web.Response = LOCKED"
+
+    client: TrueNASClient | None = request.app["truenas_client"]
+    if client:
+        return
+
+    cfg: Config | AppBaseConfig = request.app["config"]
+    if cfg.stealth_mode:
+        return STEALTH_RESPONSE
+    else:
+        return web.json_response({"error": "TrueNAS API Client is locked"}, status=400)
+
+
+def security_checks(request: web.Request) -> None | web.Response:
+    "None = PASS | web.Response = FAIL"
+
+    if app_locked := check_locked_mode(request):
+        return app_locked
+
+    if bad_response := check_request_header(request):
+        return bad_response
 
 
 # <><><><> ENDPOINTS <><><><>
@@ -72,11 +109,8 @@ async def request_handler(request: web.Request) -> web.Response:
 
     log.info("Request received")
 
-    header = check_request_header(request)
-    if header == RequestHeader.MISSING:
-        return web.json_response({"error": "Missing header"}, status=400)
-    elif header == RequestHeader.INCORRECT:
-        return web.json_response({"error": "Incorrect header"}, status=400)
+    if security_fail := security_checks(request):
+        return security_fail
 
     try:
         payload = await request.json()  # JSON-RPC payload
@@ -87,6 +121,7 @@ async def request_handler(request: web.Request) -> web.Response:
     log.info("Request payload: %s", payload)
 
     client: TrueNASClient = request.app["truenas_client"]
+    assert client is not None
     result = await client.call(payload)
     log.info("Request successful")
     log.debug("Response: %s,", result)
@@ -100,11 +135,8 @@ async def status(request: web.Request) -> web.Response:
 
     log.info("Status request received")
 
-    header = check_request_header(request)
-    if header == RequestHeader.MISSING:
-        return web.json_response({"error": "Missing header"}, status=400)
-    elif header == RequestHeader.INCORRECT:
-        return web.json_response({"error": "Incorrect header"}, status=400)
+    if security_fail := security_checks(request):
+        return security_fail
 
     client: TrueNASClient = request.app["truenas_client"]
     result = await client.status()
@@ -116,11 +148,8 @@ async def stop(request: web.Request) -> web.Response:
 
     log.info("Stop command received")
 
-    header = check_request_header(request)
-    if header == RequestHeader.MISSING:
-        return web.json_response({"error": "Missing header"}, status=400)
-    elif header == RequestHeader.INCORRECT:
-        return web.json_response({"error": "Incorrect header"}, status=400)
+    if security_fail := security_checks(request):
+        return security_fail
 
     request.app["shutdown_event"].set()
 
@@ -131,11 +160,8 @@ async def restart(request: web.Request) -> web.Response:
 
     log.info("Restart command received")
 
-    header = check_request_header(request)
-    if header == RequestHeader.MISSING:
-        return web.json_response({"error": "Missing header"}, status=400)
-    elif header == RequestHeader.INCORRECT:
-        return web.json_response({"error": "Incorrect header"}, status=400)
+    if security_fail := security_checks(request):
+        return security_fail
 
     async def _restart() -> None:
         await asyncio.sleep(0.2)
@@ -170,3 +196,43 @@ async def restart(request: web.Request) -> web.Response:
 
     asyncio.create_task(_restart())
     return web.json_response({"result": "Restarting the conduit service..."})
+
+
+async def unlock(request: web.Request) -> web.Response:
+
+    log.info("Unlock request received")
+
+    if bad_response := check_request_header(request):
+        return bad_response
+
+    try:
+        payload = await request.json()  # JSON-RPC payload
+    except json.JSONDecodeError as e:
+        log.error("Malformed request, skipping: %s", e)
+        return web.json_response({"error": "Malformed request"}, status=400)
+
+    log.info("Request payload: %s", payload)
+
+    cfg: Config | AppBaseConfig = request.app["config"]
+
+    try:
+        crypt_key = payload["crypt_key"]
+    except KeyError:
+        log.error("crypt_key field is required in the request JSON")
+        if cfg.stealth_mode:
+            return STEALTH_RESPONSE
+        else:
+            return web.json_response(
+                {"error": "Unlock password was missing or invalid"}, status=400
+            )
+
+    unlocker: Unlocker = request.app["unlocker"]
+    unlock_result = await unlocker.unlock(crypt_key)
+    if unlock_result is True:
+        # Return result back to CLI as JSON
+        return web.json_response({"result": "Service has been unlocked"})
+    else:
+        # must be an exception
+        return web.json_response(
+            {"result": "Unlock failed", "error": str(unlock_result)}, status=400
+        )

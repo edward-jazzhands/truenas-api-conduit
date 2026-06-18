@@ -46,6 +46,7 @@ class Endpoints(StrEnum):
     STATUS = "/status"
     STOP = "/stop"
     RESTART = "/restart"
+    UNLOCK = "/unlock"
 
 
 class AppEnv(Enum):
@@ -64,6 +65,7 @@ ENV_VARS: list[str] = [
     "TRUENAS_SERVICE_ADDRESS",
     "TRUENAS_API_ROUTE",
     "TRUENAS_REQUEST_HEADER",
+    "TRUENAS_STEALTH_MODE",
     "TRUENAS_CRYPT_KEY",
     "RICH_CLICK_THEME",
     "NO_COLOR",

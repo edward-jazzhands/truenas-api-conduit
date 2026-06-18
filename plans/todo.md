@@ -10,16 +10,16 @@
 [ ] Create a .rpm package (Fedora)
 [ ] Create a .pkg.tar.zst package (Arch)
 [ ] Create submission for TrueNAS App Marketplace
-[ ] Replace requests lib with aiohttp client
+[X] Replace requests lib with aiohttp client
 [?] Integrate systemd-python for better service integration in the service
 [ ] Write unit tests for everything
 [ ] Add support for docker Secrets
-[ ] Finish process of moving the settings.toml file to exterior assets
+[X] Finish process of moving the settings.toml file to exterior assets
+[ ] Add a theme setter command
 [ ] Get all commands working with docker version
-[ ] Implement the "start locked" feature
+[X] Implement the "start locked" feature
 [X] Add an env command to the CLI to see all env vars and which are currently set
 [ ] Add tracking of which versions of the TrueNAS API the current version is validated against (this should very rarely change)
-[ ] Fix NO_COLOR env var to work with setting 0/false/no
 [X] Improve the completions command to be more robust and show the correct shell
 [X] write status options to separate/toggle OS status message passthrough
 [X] Create logs command to print the system logs on the base class and services

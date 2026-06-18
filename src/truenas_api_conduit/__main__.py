@@ -22,7 +22,6 @@ from truenas_api_conduit.console import console_stderr, console_stdout
 from truenas_api_conduit.cli_helpers import (
     CLIOptions,
     logging_setup,
-    config_setup,
     make_usage_error_panel,
     make_success_panel,
     prompt_for_config,
@@ -176,6 +175,7 @@ main_commands = [
     "start",
     "stop",
     "restart",
+    "unlock",
     "status",
     "uninstall",
     "logs",
@@ -264,7 +264,7 @@ field in the config file, or set the environment variable
 
 
 @cli.command(help=start_help, short_help=start_help_short)
-@click.option("--standalone", is_flag=True, default=False, help=standalone_help)
+@click.option("-s", "--standalone", is_flag=True, default=False, help=standalone_help)
 @click.option("-api", "--api-key", is_flag=True, default=None, help=api_key_help)
 @click.option("-host", "--truenas-host", help=truenas_host_help)
 @common_options
@@ -286,6 +286,9 @@ def start(
 
     ctx.obj.api_key = api_key
     ctx.obj.truenas_host = truenas_host
+
+    from truenas_api_conduit.core.config_setup import config_setup
+
     cfg = config_setup(ctx.obj)
 
     if standalone:
@@ -387,6 +390,8 @@ def install(ctx: click.RichContext) -> None:
         console_stderr.print("Cancelled")
         sys.exit(1)
 
+    from truenas_api_conduit.core.config_setup import config_setup
+
     cfg = config_setup(ctx.obj)
     service = get_service_manager(core.PLATFORM)
 
@@ -426,6 +431,8 @@ def uninstall(ctx: click.RichContext) -> None:
     ):
         console_stderr.print("Cancelled")
         sys.exit(1)
+
+    from truenas_api_conduit.core.config_setup import config_setup
 
     cfg = config_setup(ctx.obj)
     service = get_service_manager(core.PLATFORM)
@@ -701,7 +708,7 @@ def stop(ctx: click.RichContext, direct: bool = False) -> None:
 
     # This will tell us if the service is installed or not
     detect = service.detect_service()
-    log.info("Detected service running as: %s", detect)
+    log.info("Service mode is: %s", detect)
 
     if (detect == core.AppEnv.STANDALONE) or direct:
         # Option 1: Sending a request
@@ -787,7 +794,7 @@ def restart(ctx: click.RichContext) -> None:
 
     service = get_service_manager(core.PLATFORM)
     detect = service.detect_service()
-    log.info("Detected service running as: %s", detect)
+    log.info("Service mode is: %s", detect)
 
     if detect == core.AppEnv.STANDALONE:
         request_helper = get_request_helper()
@@ -848,6 +855,50 @@ def restart(ctx: click.RichContext) -> None:
         assert_never(detect)
 
 
+unlock_help_short = """Unlock the service"""
+
+unlock_help = """Unlock the service"""
+
+
+@cli.command(help=unlock_help, short_help=unlock_help_short)
+@request_options
+@common_options
+@click.pass_context
+def unlock(ctx: click.RichContext, system: bool = False) -> None:
+
+    logging_setup(ctx)
+    assert ctx.console is not None
+    assert isinstance(ctx.obj, CLIOptions)
+
+    request_helper = get_request_helper()
+    log.debug(request_helper)
+    if not request_helper:
+        console_stderr.print(
+            make_usage_error_panel("TrueNAS API Conduit service is not running")
+        )
+        sys.exit(1)
+
+    crypt_key = click.prompt("Enter your encryption password", hide_input=True)
+
+    response = request_helper(core.Endpoints.UNLOCK, {"crypt_key": crypt_key})
+    if ctx.obj.pretty:
+        try:
+            jsons = json.loads(response.text)
+            ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
+        except json.JSONDecodeError as e:
+            log.error(
+                "Response from server is not valid JSON: %s | Disable pretty "
+                "printing to see the raw response",
+                e,
+            )
+            if ctx.obj.verbose >= 3:
+                raise
+            else:
+                sys.exit(1)
+    else:
+        ctx.console.print(response.text, soft_wrap=True)
+
+
 status_help_short = """Check the status/ping of the conduit service"""
 
 status_help = """Check the status/ping of the conduit service.
@@ -882,9 +933,7 @@ def status(ctx: click.RichContext, system: bool = False) -> None:
             if ctx.obj.pretty:
                 try:
                     jsons = json.loads(response.text)
-                    ctx.console.print(
-                        json.dumps(jsons, indent=2), soft_wrap=True
-                    )
+                    ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
                 except json.JSONDecodeError as e:
                     log.error(
                         "Response from server is not valid JSON: %s | Disable pretty "
@@ -907,7 +956,7 @@ def status(ctx: click.RichContext, system: bool = False) -> None:
         # 2: Asking the service manager
         service = get_service_manager(core.PLATFORM)
         detect = service.detect_service()
-        log.info("Detected service running as: %s", detect)
+        log.info("Service mode is: %s", detect)
 
         if detect == core.AppEnv.STANDALONE:
             # Not installed, just exit
@@ -971,7 +1020,7 @@ def logs(ctx: click.RichContext, limit: int, follow: bool = False) -> None:
 
     service = get_service_manager(core.PLATFORM)
     detect = service.detect_service()
-    log.info("Detected service running as: %s", detect)
+    log.info("Service mode is: %s", detect)
 
     if detect != core.AppEnv.OS_SERVICE:
         console_stderr.print(
@@ -1057,7 +1106,6 @@ def set_key(
     import keyring
     import keyring.errors as kr_errs
     import keyring.backend
-    from truenas_api_conduit.config.crypt_key import store_crypt_key
     from truenas_api_conduit.config.file_encrypter import (
         FileEncrypter,
         PasswordGetError,
@@ -1125,12 +1173,6 @@ def set_key(
             action_desc = "set API key"
             api_key = click.prompt("Enter your TrueNAS API key", hide_input=True)
             keyring.set_password(service, username, api_key)
-            log.debug("Success: key set")
-            actions.append(action_desc)
-            if "FileEncrypter" in current_backend.name:
-                action_desc = "store crypt key in file"
-                if store_crypt_key(file_encrypter.crypt_key):
-                    actions.append(action_desc)
     except click.Abort:
         raise
     except PasswordGetError as e:
@@ -1237,6 +1279,8 @@ def config(
         )
 
     elif print_config:
+        from truenas_api_conduit.core.config_setup import config_setup
+
         cfg = config_setup(ctx.obj, unmask=unmask)
         json_dict = cfg.model_dump_json(indent=2, context={"unmask": unmask})
 
@@ -1317,6 +1361,8 @@ def reference(ctx: click.RichContext) -> None:
             make_usage_error_panel("Config file not found", "Config Error")
         )
         sys.exit(1)
+
+    from truenas_api_conduit.core.config_setup import config_setup
 
     cfg = config_setup(ctx.obj)
 
