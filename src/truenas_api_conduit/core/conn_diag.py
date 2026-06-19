@@ -71,7 +71,8 @@ def curl_test(address: str, api_route: str, timeout: int = 2) -> bool | None:
         log.debug(f"curl timed out after {timeout} seconds")
         return False
 
-    log.debug("curl response:\n %s \n %s", result.stdout, result.stderr)
+    # NOTE: if we find "SSL certificate problem" it means the server is up
+    # and we can reach it. This will be fine if validate_certs is set to False
     if "WebSocket" in result.stdout or "SSL certificate problem" in result.stderr:
         return True
     else:

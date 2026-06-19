@@ -24,10 +24,11 @@ __all__ = [
 @dataclass
 class CLIOptions:
 
-    api_key: str | None = None
-    crypt_key: str | None = None
-    truenas_host: str | None = None
     verbose: int = 0
+    api_key: bool | None = None
+    crypt_key: str | None = None
+    start_locked: bool | None = None
+    truenas_host: str | None = None
     no_color: bool | None = None
     pretty: bool | None = None
 

@@ -172,12 +172,13 @@ class CustomGroup(DYMMixin, click.RichGroup):  # Adds click-didyoumean
 main_commands = [
     "request",
     "install",
+    "uninstall",
     "start",
     "stop",
     "restart",
+    "lock",
     "unlock",
     "status",
-    "uninstall",
     "logs",
 ]
 
@@ -233,9 +234,10 @@ def cli(ctx: click.RichContext) -> None:
     # the full context when it does the setups.
 
 
-start_help_short = """Tell your OS to start the conduit service"""
+start_help_short = """Start the conduit service, either through your OS service 
+manager (if installed) or in standalone mode"""
 
-start_help = f"""Tell your OS to start the conduit service.\n
+start_help = f"""Start the conduit service.\n
 \n
 You can also start the program directly as a standalone program without installing
 by using the [{COLORS.option}]--standalone[/{COLORS.option}] option, which
@@ -249,6 +251,14 @@ Tip: to run standalone in the background, use:\n
 
 standalone_help = """Start the service as a standalone program in the foreground (not
 run by your service manager). Does not require installation"""
+
+locked_help = f"""(Only with [{COLORS.command}]--standalone[default])
+Start the service in locked mode. This can only be used if
+you've set your API key using the [{COLORS.command}]set-key[default] command.
+It will delay retrieving the API key until the unlock password has been
+provided. You can also set the [{COLORS.envvar}]start_locked[default] field
+in the config file, or set the environment variable
+[env: [{COLORS.envvar}]TRUENAS_START_LOCKED[default]=]"""
 
 api_key_help = f"""(Only with [{COLORS.command}]--standalone[default])
 Ask to be prompted for your TrueNAS API key. You can also use the
@@ -265,13 +275,15 @@ field in the config file, or set the environment variable
 
 @cli.command(help=start_help, short_help=start_help_short)
 @click.option("-s", "--standalone", is_flag=True, default=False, help=standalone_help)
-@click.option("-api", "--api-key", is_flag=True, default=None, help=api_key_help)
-@click.option("-host", "--truenas-host", help=truenas_host_help)
+@click.option("-l", "--locked", is_flag=True, default=False, help=locked_help)
+@click.option("-a", "--api-key", is_flag=True, default=None, help=api_key_help)
+@click.option("-h", "--truenas-host", help=truenas_host_help)
 @common_options
 @click.pass_context
 def start(
     ctx: click.RichContext,
     standalone: bool,
+    locked: bool = False,
     api_key: bool | None = None,
     truenas_host: str | None = None,
 ) -> None:
@@ -279,22 +291,45 @@ def start(
     logging_setup(ctx)
     assert ctx.console is not None
 
+    # standalone + locked = OK
+    # standalone + api_key = OK
+    # standalone + truenas_host = OK
+    # locked + api_key = ERROR
+    # locked + truenas_host = ERROR? (might be ok?)
+    # api_key + truenas_host = OK
+
     if (api_key or truenas_host) and not standalone:
         raise click.UsageError(
             "You can only use the --api-key and --truenas-host options with --standalone"
         )
 
+    if api_key and locked:
+        raise click.UsageError(
+            "You cannot use the --api-key and --locked options together"
+        )
+
+    assert isinstance(ctx.obj, CLIOptions)
+
+    ctx.obj.start_locked = locked
     ctx.obj.api_key = api_key
     ctx.obj.truenas_host = truenas_host
 
-    from truenas_api_conduit.core.config_setup import config_setup
-
-    cfg = config_setup(ctx.obj)
+    from truenas_api_conduit.core.config_setup import config_setup, config_setup_locked
 
     if standalone:
-        log.info("Starting service in foreground")
+
+        if locked:
+            log.info("Starting service in foreground, and in locked mode")
+            cfg = config_setup_locked(ctx.obj)
+        else:
+            log.info("Starting service in foreground")
+            cfg = config_setup(ctx.obj)
 
         cfg_dump = cfg.model_dump_json(context={"unmask": True})
+
+        os.environ["TRUENAS_APP_ENV"] = core.AppEnv.STANDALONE.value
+        if locked:
+            os.environ["TRUENAS_START_LOCKED"] = "true"
 
         try:
             # file descriptors are just indices into the process's open file table,
@@ -327,7 +362,6 @@ def start(
 
             # The new program inherits all open file descriptors, including fd 0,
             # which it now sees as normal stdin
-            os.environ["TRUENAS_APP_ENV"] = core.AppEnv.STANDALONE.value
             os.execvp(SERVICENAME, [SERVICENAME])
         except OSError as e:
             err_string = core.examine_os_error(e)
@@ -347,7 +381,7 @@ def start(
         try:
             service.start()
         except Exception as e:
-            if cfg.log_level == "trace":
+            if ctx.obj.verbose >= 3:
                 raise
             else:
                 action = "starting"
@@ -757,8 +791,8 @@ def stop(ctx: click.RichContext, direct: bool = False) -> None:
                 panel = make_usage_error_panel(err_string, "Service Start Error")
                 console_stderr.print(panel)
                 sys.exit(1)
-        else:
-            ctx.console.print("TrueNAS API Conduit service was stopped")
+        # else:
+        #     ctx.console.print("TrueNAS API Conduit service was stopped")
 
     elif detect == core.AppEnv.DOCKER:
         err_panel = make_usage_error_panel(
@@ -782,7 +816,7 @@ mode does this automatically)"""
 @click.option("-d", "--direct", is_flag=True, default=False, help=restart_direct_help)
 @common_options
 @click.pass_context
-def restart(ctx: click.RichContext) -> None:
+def restart(ctx: click.RichContext, direct: bool = False) -> None:
 
     logging_setup(ctx)
     assert ctx.console is not None
@@ -796,7 +830,7 @@ def restart(ctx: click.RichContext) -> None:
     detect = service.detect_service()
     log.info("Service mode is: %s", detect)
 
-    if detect == core.AppEnv.STANDALONE:
+    if (detect == core.AppEnv.STANDALONE) or direct:
         request_helper = get_request_helper()
         log.debug(request_helper)
         if not request_helper:
@@ -804,7 +838,7 @@ def restart(ctx: click.RichContext) -> None:
                 make_usage_error_panel("TrueNAS API Conduit service is not running")
             )
             sys.exit(1)
-        response = request_helper(core.Endpoints.RESTART, {})
+        response = request_helper(core.Endpoints.RESTART, {})  # empty dict to post
 
         if ctx.obj.pretty:
             try:
@@ -842,8 +876,8 @@ def restart(ctx: click.RichContext) -> None:
                 panel = make_usage_error_panel(err_string, "Service Start Error")
                 console_stderr.print(panel)
                 sys.exit(1)
-        else:
-            ctx.console.print("TrueNAS API Conduit service restarted")
+        # else:
+        #     ctx.console.print("TrueNAS API Conduit service restarted")
 
     elif detect == core.AppEnv.DOCKER:
         err_panel = make_usage_error_panel(
@@ -855,16 +889,56 @@ def restart(ctx: click.RichContext) -> None:
         assert_never(detect)
 
 
+lock_help_short = """Lock the service"""
+
+lock_help = """Lock the service"""
+
+
+@cli.command(help=lock_help, short_help=lock_help_short)
+@common_options
+@click.pass_context
+def lock(ctx: click.RichContext) -> None:
+
+    logging_setup(ctx)
+    assert ctx.console is not None
+    assert isinstance(ctx.obj, CLIOptions)
+
+    request_helper = get_request_helper()
+    log.debug(request_helper)
+    if not request_helper:
+        console_stderr.print(
+            make_usage_error_panel("TrueNAS API Conduit service is not running")
+        )
+        sys.exit(1)
+
+    response = request_helper(core.Endpoints.LOCK, {})  # empty dict to post
+    if ctx.obj.pretty:
+        try:
+            jsons = json.loads(response.text)
+            ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
+        except json.JSONDecodeError as e:
+            log.error(
+                "Response from server is not valid JSON: %s | Disable pretty "
+                "printing to see the raw response",
+                e,
+            )
+            if ctx.obj.verbose >= 3:
+                raise
+            else:
+                sys.exit(1)
+    else:
+        ctx.console.print(response.text, soft_wrap=True)
+
+
 unlock_help_short = """Unlock the service"""
 
 unlock_help = """Unlock the service"""
 
 
 @cli.command(help=unlock_help, short_help=unlock_help_short)
-@request_options
 @common_options
 @click.pass_context
-def unlock(ctx: click.RichContext, system: bool = False) -> None:
+def unlock(ctx: click.RichContext) -> None:
 
     logging_setup(ctx)
     assert ctx.console is not None

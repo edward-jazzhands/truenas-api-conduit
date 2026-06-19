@@ -66,6 +66,12 @@ class PasswordGetError(KeyringError, ConduitError):
         self.err_code = err_code
         super().__init__(err_code)
 
+    def __repr__(self) -> str:
+        return f"PasswordGetError(err_code={self.err_code}, causing_exception={self.causing_exception})"
+
+    def __str__(self) -> str:
+        return self.err_code.name
+
 
 class NotATTYError(KeyringError, ConduitError):
     pass
@@ -82,10 +88,12 @@ class FileEncrypter(KeyringBackend):
             "Using the file encrypter keyring backend. This is selected when "
             "there is no other keyring backend available. You will be prompted "
             "to enter an encryption key to store and retrieve your API key.\n"
-            f"You can also set the [{COLORS.envvar}]{CRYPT_KEY_ENV}[default] environment "
-            f"variable or create a [{COLORS.envvar}]{CRYPT_FILE_NAME}[default] file to avoid this "
-            f"prompt. The [{COLORS.command}]set-key[default] command in the CLI will "
-            f"offer to create a {CRYPT_FILE_NAME} file for you"
+            "There's several ways you can avoid this warning:\n"
+            f"- Set the [{COLORS.envvar}]{CRYPT_KEY_ENV}[default] environment variable\n"
+            f"- Create a [{COLORS.envvar}]{CRYPT_FILE_NAME}[default] file in the config "
+            f"dir. (The [{COLORS.command}]set-key[default] command in the CLI will "
+            f"offer to create a {CRYPT_FILE_NAME} file for you)\n"
+            f"- Start the service in locked mode (env var, config file, --locked option)"
         )
         super().__init__()
 
@@ -204,7 +212,6 @@ class FileEncrypter(KeyringBackend):
             crypt_key = self._get_crypt_key(service, username)
 
         safebytes = base64.urlsafe_b64encode(kdf.derive(crypt_key.encode()))
-        del crypt_key
         return safebytes
 
     def _get_crypt_key(self, service: str, username: str) -> str:
@@ -224,7 +231,6 @@ class FileEncrypter(KeyringBackend):
             )
             crypt_key = getpass.getpass(stream=sys.stderr)
             self.crypt_key = SecretStr(crypt_key)
-            del crypt_key
             return self.crypt_key.get_secret_value()
         else:
             raise NotATTYError("No env var set and stdin is not a TTY")

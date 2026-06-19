@@ -87,11 +87,11 @@ def check_locked_mode(request: web.Request) -> None | web.Response:
 def security_checks(request: web.Request) -> None | web.Response:
     "None = PASS | web.Response = FAIL"
 
-    if app_locked := check_locked_mode(request):
-        return app_locked
-
     if bad_response := check_request_header(request):
         return bad_response
+
+    if app_locked := check_locked_mode(request):
+        return app_locked
 
 
 # <><><><> ENDPOINTS <><><><>
@@ -198,6 +198,38 @@ async def restart(request: web.Request) -> web.Response:
     return web.json_response({"result": "Restarting the conduit service..."})
 
 
+async def lock(request: web.Request) -> web.Response:
+
+    log.info("Lock request received")
+
+    if security_fail := security_checks(request):
+        return security_fail
+
+    try:
+        payload = await request.json()  # JSON-RPC payload
+    except json.JSONDecodeError as e:
+        log.error("Malformed request, skipping: %s", e)
+        return web.json_response({"error": "Malformed request"}, status=400)
+
+    log.info("Request payload: %s", payload)
+
+    client: TrueNASClient | None = request.app["truenas_client"]
+    request.app["locked"] = True
+    if client:
+        if client.config:
+            request.app["json_dict"] = client.config.model_dump()
+        close_result = await client.close()
+        log.debug(close_result)
+        if close_result.is_closed:
+            log.info("The TrueNAS websocket client closed itself gracefully")
+        else:
+            log.warning(close_result.msg)
+
+    request.app["truenas_client"] = None
+    request.app["truenas_task"] = None
+    return web.json_response({"result": "Service has been locked"})
+
+
 async def unlock(request: web.Request) -> web.Response:
 
     log.info("Unlock request received")
@@ -227,7 +259,7 @@ async def unlock(request: web.Request) -> web.Response:
             )
 
     unlocker: Unlocker = request.app["unlocker"]
-    unlock_result = await unlocker.unlock(crypt_key)
+    unlock_result = await unlocker.unlock_key(crypt_key)
     if unlock_result is True:
         # Return result back to CLI as JSON
         return web.json_response({"result": "Service has been unlocked"})

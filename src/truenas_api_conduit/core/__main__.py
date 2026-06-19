@@ -6,7 +6,8 @@ import logging
 import asyncio
 import signal
 import tomllib
-from typing import TYPE_CHECKING, Callable, assert_never
+from functools import partial
+from typing import TYPE_CHECKING, Callable, Any
 from asyncio import AbstractEventLoop
 
 if TYPE_CHECKING:
@@ -14,12 +15,12 @@ if TYPE_CHECKING:
     # the config is frozen. As such we need to defer importing it until
     # we've had a chance to set that global.
     from truenas_api_conduit.config import Config, AppBaseConfig
+    from truenas_api_conduit.core.ws_client import TrueNASClient
 
 
 # third party
 import pydantic
 from aiohttp import web
-from aiohttp.web_runner import GracefulExit
 
 # project
 from truenas_api_conduit import LOCK_FILE
@@ -38,7 +39,20 @@ class Unlocker:
     def __init__(self, app: web.Application) -> None:
         self.app = app
 
-    async def unlock(self, crypt_key: str) -> bool | Exception:
+    async def unlock_dict(
+        self, json_dict: dict[str, Any] | None = None
+    ) -> bool | Exception:
+        return self._unlock(json_dict=json_dict)
+
+    async def unlock_key(self, crypt_key: str) -> bool | Exception:
+        return self._unlock(crypt_key=crypt_key)
+
+    async def unlock(self) -> bool | Exception:
+        return self._unlock()
+
+    def _unlock(
+        self, crypt_key: str | None = None, json_dict: dict[str, Any] | None = None
+    ) -> bool | Exception:
 
         log_level = logging.getLogger().level
         log_mapping = logging.getLevelNamesMapping()
@@ -50,7 +64,35 @@ class Unlocker:
         )
 
         try:
-            cfg = Config(crypt_key=pydantic.SecretStr(crypt_key))
+            # * If not standone then pydantic loads everything from sources.
+
+            # * If the user ran standalone and not locked, their whole config should
+            # have been passed in to stdin, which will be pre-validated on their end
+            # and already contain the API key. So we load straight into the model.
+            #! confirm that here?
+            if json_dict:
+                cfg = Config.model_validate(json_dict)
+
+            # * If the user ran standone AND locked, their config will be stored
+            # in the app["json_dict"] attribute but we don't want to load it into
+            # the model until the unlock password is provided.
+            # Used when the crypt key is sent to the /unlock endpoint
+            #! We should be able to pass in data from the user's config using
+            #! the standalone mode, start locked, storing that data in the app["json_dict"]
+            #! attribute, and then only load it all after unlocking.
+            # * Make sure this works with the docker version as well.
+            elif crypt_key:
+                if self.app["json_dict"]:
+                    stored_json = self.app["json_dict"]
+                    stored_json["crypt_key"] = pydantic.SecretStr(crypt_key)
+                    cfg = Config.model_validate(stored_json)
+                    self.app["json_dict"] = None
+                else:
+                    cfg = Config(crypt_key=pydantic.SecretStr(crypt_key))
+            # normal start, either there's no password set or the password is
+            # stored on the server (.cryptkey file or TRUENAS_CRYPT_KEY env var)
+            else:
+                cfg = Config()
         except pydantic.ValidationError as e:
             return e
         except tomllib.TOMLDecodeError as e:
@@ -71,7 +113,8 @@ class Unlocker:
                     raise
                 else:
                     log.error(
-                        "Unexpected error: %s | Raise the verbosity to see more information"
+                        "Unexpected error: %s | Raise the verbosity to see more information",
+                        e,
                     )
                     self.app["shutdown_event"].set()
                     return e
@@ -125,6 +168,18 @@ def create_lockfile(cfg: Config):
     LOCK_FILE.chmod(0o600)  # HACK: This won't do anything on windows.
 
 
+def client_closed(_task: asyncio.Task, app: web.Application) -> None:
+
+    log.info("TrueNAS websocket client was closed")
+
+    if app["locked"] is True:
+        log.warning("Going into locked mode")
+        app.pop("truenas_client", None)
+        app.pop("truenas_task", None)
+    else:
+        app["shutdown_event"].set()
+
+
 def client_startup(cfg: Config, app: web.Application):
 
     log.info("Starting TrueNAS API websocket client")
@@ -134,13 +189,16 @@ def client_startup(cfg: Config, app: web.Application):
     loop = asyncio.get_running_loop()
     client = TrueNASClient(cfg, loop)
     app["truenas_client"] = client
-    create_lockfile(cfg)
 
     # NOTE: This method creates and manages its own background task with
     # asyncio.create_task.
     task = client.start()
-    task.add_done_callback(lambda _t: app["shutdown_event"].set())
+    # task.add_done_callback(lambda _t: app["shutdown_event"].set())
+
+    callback_partial = partial(client_closed, app=app)
+    task.add_done_callback(callback_partial)
     app["truenas_task"] = task
+    app["locked"] = False
 
     log.info("TrueNAS API websocket client started")
 
@@ -152,12 +210,15 @@ async def truenas_context_manager(app: web.Application):
     # is the setup and the second half is the teardown. This convention
     # is set by aiohttp and is required to use app.cleanup_ctx
 
-    from truenas_api_conduit.config import Config, AppBaseConfig  # imports pydantic
+    from truenas_api_conduit.config import AppBaseConfig  # imports pydantic
 
     cfg = app["config"]
     log.info(f"cfg type: {cfg.__class__.__name__}")
 
-    if not isinstance(cfg, AppBaseConfig) and not isinstance(cfg, Config):
+    unlocker: Unlocker = app["unlocker"]
+    create_lockfile(cfg)
+
+    if not isinstance(cfg, AppBaseConfig):
         raise RuntimeError(f"Config object is not valid: {cfg.__class__.__name__}")
 
     if cfg.log_level not in ("trace", "debug"):
@@ -171,11 +232,27 @@ async def truenas_context_manager(app: web.Application):
     # as the indicator that the app is in locked mode
     app["truenas_client"] = None
 
-    if isinstance(cfg, Config):
-        client_startup(cfg, app)
-    elif isinstance(cfg, AppBaseConfig):
+    if not cfg.start_locked:
+        # Recall that 'json_dict' can only come from --standalone starts, or
+        # restarts triggered by the /restart endpoint
+        if app["json_dict"]:
+            log.info("loading config from stdin")
+            unlock_result = await unlocker.unlock_dict(app["json_dict"])
+            if unlock_result is True:
+                log.info("Unlock successful")
+            else:
+                log.error("Unlock attempt failed!: %s", unlock_result)
+        else:
+            # no config passed in, not starting locked
+            unlock_result = await unlocker.unlock()
+    else:
         log.warning("Starting app in locked mode")
-        # We do nothing else here.
+        app["locked"] = True
+        if app["json_dict"]:
+            log.warning(
+                "App is starting in locked mode, but config was passed in. "
+                "This config will be stored until the app is unlocked."
+            )
 
     # The 'wrap yield in try/finally' pattern. Its kind of a brainfuck
     # because we've essentially turned the entirely of the program
@@ -195,9 +272,9 @@ async def truenas_context_manager(app: web.Application):
 
         log.info("Running service teardown")
         if result := core.delete_lockfile():
-            log.error("Failed to delete stale lockfile: %s", result)
+            log.error("Failed to delete lockfile: %s", result)
 
-        client = app["truenas_client"]
+        client: TrueNASClient | None = app["truenas_client"]
         if client:
             close_result = await client.close()
             log.debug(close_result)
@@ -206,20 +283,29 @@ async def truenas_context_manager(app: web.Application):
             else:
                 log.warning(close_result.msg)
         else:
-            log.warning("There's no TrueNAS websocket client to close down")
+            if app["locked"]:
+                log.warning("Shutting down while in locked mode")
+            else:
+                log.warning("There's no TrueNAS websocket client to close down")
 
 
-async def main(cfg: Config | AppBaseConfig) -> None:
+async def main(cfg: AppBaseConfig, json_dict: dict[str, Any] | None = None) -> None:
 
     log.info("Starting to initialize the HTTP server")
 
     app = web.Application()
     app["config"] = cfg
 
+    if json_dict:
+        app["json_dict"] = json_dict
+    else:
+        app["json_dict"] = None
+
     shutdown_event = asyncio.Event()
     app["shutdown_event"] = shutdown_event
 
     app["unlocker"] = Unlocker(app)
+    # app["locked"] = True  # always start locked
 
     def handle_async_exit():
         log.info("Received OS shutdown signal.")
@@ -243,6 +329,7 @@ async def main(cfg: Config | AppBaseConfig) -> None:
     app.router.add_post("/stop", endpoints.stop)
     app.router.add_post("/restart", endpoints.restart)
     app.router.add_post("/unlock", endpoints.unlock)
+    app.router.add_post("/lock", endpoints.lock)
 
     # manages the lifecycle
     app.cleanup_ctx.append(truenas_context_manager)
@@ -256,10 +343,6 @@ async def main(cfg: Config | AppBaseConfig) -> None:
 
     try:
         await shutdown_event.wait()
-    except (GracefulExit, asyncio.CancelledError) as e:
-        log.debug("Received exit command (%s)", e.__class__.__name__)
-    else:
-        log.debug("TrueNAS client task finished with no error")
     finally:
         # will run the teardown in truenas_context_manager:
         await runner.cleanup()
@@ -289,26 +372,25 @@ def start(loop_factory: Callable[[], AbstractEventLoop] | None = None):
         console_stderr.no_color = True
 
     # recall the Config class is a pydantic-settings model
-    from truenas_api_conduit.config import Config, AppBaseConfig
+    from truenas_api_conduit.config import AppBaseConfig
 
-    raw: str | None = None
-    cfg: AppBaseConfig | Config
-    try:
-        if not sys.stdin.isatty():  # piped start, OS startup, etc
-            log.info("Detected not a TTY, checking stdin...")
-            raw = sys.stdin.read()
+    json_dict: dict[str, Any] | None = None
+    cfg: AppBaseConfig | None = None
 
-        if raw:
-            log.info("Detected input on stdin, loading from stdin")
-            cfg = Config.model_validate_json(raw)
+    if not sys.stdin.isatty():  # piped start, OS startup, etc
+        log.debug("Detected not a TTY, checking stdin...")
+        if raw := sys.stdin.read():
+            log.debug("Detected input on stdin. Parsing JSON...")
+            try:
+                json_dict = json.loads(raw)
+            except json.JSONDecodeError as e:
+                log.critical("Malformed config JSON: %s", e)
+                sys.exit(1)
         else:
-            log.info("No input on stdin, loading normally")
-            #! cfg = Config()
+            log.debug("No input on stdin")
 
-            cfg = AppBaseConfig()
-    except json.JSONDecodeError as e:
-        log.critical("Malformed config JSON: %s", e)
-        sys.exit(1)
+    try:
+        cfg = AppBaseConfig()
     except pydantic.ValidationError as e:
         log.critical("Configuration error: %s", e)
         sys.exit(1)
@@ -324,13 +406,7 @@ def start(loop_factory: Callable[[], AbstractEventLoop] | None = None):
     level_name = logging.getLevelName(log_level)
     log.info("Logging level is currently at %s", level_name)
 
-    if isinstance(cfg, Config):
-        log.debug("Config: %s", cfg)
-        log.debug("Config provenance: %s", cfg.provenance)
-    elif isinstance(cfg, AppBaseConfig):
-        log.debug("Base Config: %s", cfg)
-    else:
-        assert_never(cfg)
+    log.debug("Base Config: %s", cfg)
 
     if app_env_str := os.environ.get("TRUENAS_APP_ENV"):
         try:
@@ -348,14 +424,15 @@ def start(loop_factory: Callable[[], AbstractEventLoop] | None = None):
             log.info("Detected TRUENAS_APP_ENV: %s", appenv_enum.value)
     else:
         # If the env var is not set it probably means the user ran the
-        # truenas-api-conduit entrypoint directly.
+        # truenas-api-conduitd entrypoint directly. We can just set it
+        # for them and continue
         appenv_enum = core.AppEnv.STANDALONE
 
-        if log_level <= level_mapping["TRACE"]:
-            raise ValueError("TRUENAS_APP_ENV environment variable is not set")
-        else:
-            log.error("TRUENAS_APP_ENV environment variable is not set")
-            sys.exit(1)
+        # if log_level <= level_mapping["TRACE"]:
+        #     raise ValueError("TRUENAS_APP_ENV environment variable is not set")
+        # else:
+        #     log.error("TRUENAS_APP_ENV environment variable is not set")
+        #     sys.exit(1)
 
     log.debug("Setting app env to: %s", appenv_enum)
     app_globals.set_app_env(appenv_enum)
@@ -363,20 +440,22 @@ def start(loop_factory: Callable[[], AbstractEventLoop] | None = None):
     if app_globals.app_env is None:
         raise ValueError("Tried running app with no app_env set")
 
-    # try:
-    asyncio.run(
-        main(cfg), debug=(level_name.lower() == "trace"), loop_factory=loop_factory
-    )
+    try:
+        asyncio.run(
+            main(cfg, json_dict),
+            debug=(level_name.lower() == "trace"),
+            loop_factory=loop_factory,
+        )
     # except OSError as e:
-    #     #! im not 100% sure this is necessary here
+    #     #! im not sure this is necessary here
     #     # If we got an OSError or other exception at this point then either
     #     # we're in traceback mode, or something is very wrong.
     #     err_string = core.examine_os_error(e)
     #     error_handler(err_string, level_name, e)
     # except Exception as e:
     #     error_handler(str(e), logging.getLevelName(log_level), e)
-    # finally:
-    #     log.info("Program shutting down now")
+    finally:
+        log.warning("Program shutting down now")
 
 
 if __name__ == "__main__":

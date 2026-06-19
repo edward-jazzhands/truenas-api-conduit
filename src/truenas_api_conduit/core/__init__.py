@@ -46,6 +46,7 @@ class Endpoints(StrEnum):
     STATUS = "/status"
     STOP = "/stop"
     RESTART = "/restart"
+    LOCK = "/lock"
     UNLOCK = "/unlock"
 
 
@@ -67,6 +68,7 @@ ENV_VARS: list[str] = [
     "TRUENAS_REQUEST_HEADER",
     "TRUENAS_STEALTH_MODE",
     "TRUENAS_CRYPT_KEY",
+    "TRUENAS_START_LOCKED",
     "RICH_CLICK_THEME",
     "NO_COLOR",
     "EDITOR",

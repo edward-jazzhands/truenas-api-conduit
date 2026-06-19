@@ -165,6 +165,11 @@ class AppBaseConfig(BaseSettings):
     service_address: str = "localhost"
     request_header: str | None = None
     stealth_mode: bool = False
+    start_locked: bool = False
+
+    @property
+    def provenance(self) -> dict[str, str]:
+        return _config_provenance
 
     @field_validator("log_level")
     @classmethod
@@ -183,6 +188,10 @@ class AppBaseConfig(BaseSettings):
         if self.no_color:
             log.info("Config post init: Disabling color output")
             set_no_color()
+
+        for field, _value in Config.model_fields.items():
+            if field not in self.provenance:
+                self.provenance[field] = "default"
 
 
 class Config(AppBaseConfig):
@@ -233,10 +242,6 @@ class Config(AppBaseConfig):
     @property
     def uri(self) -> str:
         return f"wss://{self.truenas_host}{self.api_route}"
-
-    @property
-    def provenance(self) -> dict[str, str]:
-        return _config_provenance
 
     # field_validator decorator docs:
     # https://pydantic.dev/docs/validation/latest/concepts/validators/#json-schema-and-field-validators
@@ -319,11 +324,3 @@ class Config(AppBaseConfig):
     # @classmethod
     # def expand_storage_path(cls, v: Any) -> Path:
     #     return Path(v).expanduser()
-
-    def model_post_init(self, _context: Any) -> None:
-
-        super().model_post_init(_context)
-
-        for field, value in Config.model_fields.items():
-            if field not in self.provenance:
-                self.provenance[field] = "default"

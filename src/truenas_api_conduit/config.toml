@@ -14,6 +14,9 @@
 # not supplied here, via an environment variable, or via the CLI, 
 # the program will fail to start and display a validation error.
 
+# See the documentation for more information on each setting:
+# ! ADD LINK HERE WHEN READY
+
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
 # (REQUIRED) The address that you use to access the TrueNAS Web UI over HTTPS, 
@@ -41,8 +44,8 @@
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-# The path to the TrueNAS certificate file. This is required if you use a
-# self-signed certificate. If you use a certificate signed by a trusted CA,
+# The path to the TrueNAS certificate file. This is required if you want to use
+# a self-signed certificate. If you use a certificate signed by a trusted CA,
 # you can leave this blank. Alternatively, you can set validate_certs to false.
 #     Default: None
 #     Equivalent Environment Var: TRUENAS_CERT_PATH
@@ -112,8 +115,10 @@
 
 # You can set a request header to be required for all requests to the
 # service. This can add an extra layer of security because scripts
-# will need to know what the header is in order to make requests
-# (ie. curl, etc.). The included CLI will use this automatically if set.
+# will need to know what the header is in order to send any command,
+# (including stop, unlock, etc). Note this only applies to the service
+# HTTP endpoints, not controlling it through the OS service manager.
+# The included CLI will use this automatically if set.
 #     Default: None
 #     Equivalent Environment Var: TRUENAS_REQUEST_HEADER
 
@@ -127,8 +132,21 @@
 # because if someone is somehow able to snoop on your open ports,
 # they can't tell if the service is running or not.
 #     Default: false
-#     Equivalent Environment Var: TRUENAS_REQUEST_HEADER
+#     Equivalent Environment Var: TRUENAS_STEALTH_MODE
 
 # stealth_mode = false
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+# If start_locked is true, you'll be required to use your password
+# to unlock the service. This is equivalent to using the --locked
+# option on the CLI start command. If you're using the built-in file
+# encryption to store your API key, and the password is not also
+# stored on the server (.cryptkey file or TRUENAS_CRYPT_KEY env var),
+# the service will start in locked mode automatically.
+#     Default: false
+#     Equivalent Environment Var: TRUENAS_START_LOCKED
+
+# start_locked = false
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

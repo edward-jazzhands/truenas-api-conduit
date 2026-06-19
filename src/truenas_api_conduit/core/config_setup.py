@@ -1,10 +1,11 @@
 # standard library
 import sys
 import logging
+import tomllib
 from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from truenas_api_conduit.config.user_config import Config
+    from truenas_api_conduit.config.user_config import Config, AppBaseConfig
     from pydantic import ValidationError
     import tomllib
 
@@ -28,11 +29,7 @@ __all__ = [
 ]
 
 
-def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
-
-    log_level: int = logging.getLogger().level
-    level_name = logging.getLevelName(log_level)
-    log_mapping = logging.getLevelNamesMapping()
+def shared_config_setup(cli_options: CLIOptions) -> None:
 
     if not core.CONFIG_PATH.exists():
         if not cli_options.api_key or not cli_options.truenas_host:
@@ -49,15 +46,14 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
     core.ensure_config()  # Raises if failure
     core.ensure_storage_dir()
 
+
+def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
+
+    shared_config_setup(cli_options)
+
     # Pydantic will not be loaded until this following import. Its one
     # of the heavier dependencies so this improves startup time marginally.
     from truenas_api_conduit.config import Config
-    from truenas_api_conduit.config.file_encrypter import (
-        PasswordGetError,
-        GetErrorEnum,
-    )
-    from pydantic import ValidationError
-    import tomllib
 
     # only used by the start command
     if cli_options.api_key:
@@ -67,6 +63,10 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
     else:
         api_key = None
 
+    #! is this code ever reached?
+    if cli_options.start_locked:
+        log.info("Starting in locked mode")
+
     # only used by the print-config command
     # NOTE: The point of this is so that the user won't be triggered to enter
     # the password for their keyring/secret manager unless they set --unmask.
@@ -74,6 +74,8 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
     # CLI args and thus will skip the keyring/secret manager.
     if unmask is False:
         api_key = "*" * 10
+
+    level_name = logging.getLevelName(logging.getLogger().level)
 
     # Creating an args dict because we only want to pass in the args that the user
     # passed in through the CLI. You can't pass None values to the Config class because
@@ -84,9 +86,9 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
         "truenas_host": cli_options.truenas_host,
         "api_key": api_key,
         "crypt_key": cli_options.crypt_key,
+        "start_locked": cli_options.start_locked,
     }
     args_dict = {k: v for k, v in to_filter.items() if v is not None}
-
     log.debug("Config args: %s", args_dict)
 
     # NOTE: on the log level: warning is already the default set in the pydantic
@@ -96,40 +98,9 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
 
     try:
         cfg = Config(**args_dict)
-    except ValidationError as e:
-        _pydantic_error_panel(e)
-        sys.exit(1)
-    except tomllib.TOMLDecodeError as e:
-        _toml_decoding_error_panel(e)
-        sys.exit(1)
-    except PasswordGetError as e:
-        # This is my custom error class so it will only happen if keyring tried
-        # to use my fallback FileEncrypter backend, and the user password was
-        # incorrect. Or a bug happened.
-        err_string: str | None = None
-        if e.err_code == GetErrorEnum.INCORRECT_ENCRYPTION_KEY:
-            err_string = "The encryption key you have entered is incorrect."
-            console_stderr.print(make_usage_error_panel(err_string, "Keyring Error"))
-            sys.exit(1)
-        else:
-            if cli_options.verbose >= 3:
-                raise
-            else:
-                log.error(
-                    "Unexpected error: %s | Raise the verbosity to see more information"
-                )
-                sys.exit(1)
     except Exception as e:
-        if log_level <= log_mapping["TRACE"]:
-            raise
-        else:
-            err_string = (
-                "[default]Could not initialize config:\n\n"
-                f"    {e} ({e.__class__.__qualname__})\n\n"
-                "Raise the verbosity to see more information."
-            )
-            console_stderr.print(make_usage_error_panel(err_string))
-            sys.exit(1)
+        handle_config_error(e)
+        sys.exit(1)  # this line will never be reached, but typechecker doesn't know that
 
     log.info("Config loaded successfully")
     config_str = ""
@@ -140,6 +111,93 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
         config_str += new_section
     log.info(config_str)
     return cfg
+
+
+def config_setup_locked(cli_options: CLIOptions) -> AppBaseConfig:
+
+    shared_config_setup(cli_options)
+
+    # Pydantic will not be loaded until this following import. Its one
+    # of the heavier dependencies so this improves startup time marginally.
+    from truenas_api_conduit.config import AppBaseConfig
+
+    if cli_options.start_locked:
+        log.info("Starting in locked mode")
+
+    level_name = logging.getLevelName(logging.getLogger().level)
+
+    to_filter: dict[str, Any] = {
+        "log_level": level_name if level_name.upper() != "WARNING" else None,
+        "no_color": cli_options.no_color,
+        "start_locked": cli_options.start_locked,
+    }
+    args_dict = {k: v for k, v in to_filter.items() if v is not None}
+
+    log.debug("Config args: %s", args_dict)
+
+    try:
+        cfg = AppBaseConfig(**args_dict)
+    except Exception as e:
+        handle_config_error(e)
+        sys.exit(1)  # this line will never be reached, but typechecker doesn't know that
+
+    log.info("AppBaseConfig loaded successfully")
+    config_str = ""
+    for field, value in cfg.model_dump().items():
+        new_section = f"\n{field}: {value}"
+        new_section += " " * (35 - len(new_section))
+        new_section += f"(from {cfg.provenance[field]})"
+        config_str += new_section
+    log.info(config_str)
+    return cfg
+
+
+def handle_config_error(e: Exception) -> None:
+
+    from truenas_api_conduit.config.file_encrypter import (
+        PasswordGetError,
+        GetErrorEnum,
+    )
+    from pydantic import ValidationError
+
+    log_level: int = logging.getLogger().level
+    log_mapping = logging.getLevelNamesMapping()
+
+    if isinstance(e, ValidationError):
+        _pydantic_error_panel(e)
+        sys.exit(1)
+    if isinstance(e, tomllib.TOMLDecodeError):
+        _toml_decoding_error_panel(e)
+        sys.exit(1)
+    if isinstance(e, PasswordGetError):
+        # This is my custom error class so it will only happen if keyring tried
+        # to use my fallback FileEncrypter backend, and the user password was
+        # incorrect. Or a bug happened.
+        err_string: str | None = None
+        if e.err_code == GetErrorEnum.INCORRECT_ENCRYPTION_KEY:
+            err_string = "The encryption key you have entered is incorrect."
+            console_stderr.print(make_usage_error_panel(err_string, "Keyring Error"))
+            sys.exit(1)
+        else:
+            if log_level <= log_mapping["TRACE"]:
+                raise
+            else:
+                log.error(
+                    "Unexpected error: %s | Raise the verbosity to see more information"
+                )
+                sys.exit(1)
+    if isinstance(e, Exception):
+
+        if log_level <= log_mapping["TRACE"]:
+            raise
+        else:
+            err_string = (
+                "[default]Could not initialize config:\n\n"
+                f"    {e} ({e.__class__.__qualname__})\n\n"
+                "Raise the verbosity to see more information."
+            )
+            console_stderr.print(make_usage_error_panel(err_string))
+            sys.exit(1)
 
 
 field_help_dict = {

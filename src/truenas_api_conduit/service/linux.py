@@ -9,10 +9,7 @@ import sys
 import os
 from pathlib import Path
 import logging
-from typing import TYPE_CHECKING, Final
-
-if TYPE_CHECKING:
-    from truenas_api_conduit.config.user_config import Config
+from typing import Final
 
 # local
 from truenas_api_conduit import APP_NAME, SERVICENAME
@@ -278,6 +275,11 @@ class LinuxService(BaseService):
             console_stdout.print("No service installation detected.")
             return
 
+        status_check = self.status(forward_stdout=False, suppress_output=True)
+        if status_check == 0:
+            console_stdout.print("Service is already running.")
+            return
+
         self._systemctl("start", UNIT_NAME, required=True)
 
     def stop(self) -> None:
@@ -287,7 +289,14 @@ class LinuxService(BaseService):
             console_stdout.print("No service installation detected.")
             return
 
-        self._systemctl("stop", UNIT_NAME, required=True)
+        status_check = self.status(forward_stdout=False, suppress_output=True)
+        if status_check == 3:
+            console_stdout.print("Service is already stopped.")
+            return
+
+        result = self._systemctl("stop", UNIT_NAME, required=True)
+        if result.returncode == 0:
+            console_stdout.print("Service stopped successfully")
 
     # systemd Restart vs Reload
     # Restart: kills the process and starts a new one with a new pid
@@ -304,12 +313,14 @@ class LinuxService(BaseService):
             console_stdout.print("No service installation detected.")
             return
 
-        self._systemctl("restart", UNIT_NAME, required=True)
+        result = self._systemctl("restart", UNIT_NAME, required=True)
+        if result.returncode == 0:
+            console_stdout.print("Service restarted successfully")
 
-    def status(self, forward_stdout: bool = True) -> int:
+    def status(self, forward_stdout: bool = True, suppress_output: bool = False) -> int:
         # Print live service status directly from systemctl.
 
-        if not self.installed:
+        if not self.installed and not suppress_output:
             console_stdout.print("No service installation detected.")
             return 1
 
@@ -325,14 +336,15 @@ class LinuxService(BaseService):
         output = result.stdout or result.stderr
         log.info("systemctl status code: %s (%s)", code, self.code_mapping[code])
 
-        if code == 0:
-            console_stdout.print(
-                "systemd says service is active (use -sys or -v for more info)"
-            )
-        elif code == 3:
-            console_stdout.print(
-                "systemd says service is stopped (use -sys or -v for more info)"
-            )
+        if not suppress_output:
+            if code == 0:
+                console_stdout.print(
+                    "systemd says service is active (use -sys or -v for more info)"
+                )
+            elif code == 3:
+                console_stdout.print(
+                    "systemd says service is stopped (use -sys or -v for more info)"
+                )
 
         if output:
             if forward_stdout:
