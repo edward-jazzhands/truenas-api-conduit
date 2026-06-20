@@ -6,7 +6,7 @@ from pathlib import Path
 
 from rich.traceback import install as tb_install
 
-import truenas_api_conduit.log_setup as log_setup
+from truenas_api_conduit.log_setup import logging_manager
 from truenas_api_conduit.console import console_stderr
 
 __all__ = [
@@ -14,7 +14,7 @@ __all__ = [
     "SERVICENAME",
     "LOCK_FILE",
     "__version__",
-    "log_setup",
+    "logging_manager",
     "COLORS",
 ]
 

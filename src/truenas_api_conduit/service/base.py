@@ -34,7 +34,7 @@ class BaseService(ABC):
         pass
 
     @abstractmethod
-    def status(self, forward_stdout: bool = True) -> int:
+    def status(self, forward_stdout: bool = True, suppress_output: bool = False) -> int:
         # Status should print whatever the actual service manager prints to stdout
         # and *then* return the exit code of the command (at least on Linux, not sure
         # if this equally applies to mac and windows)

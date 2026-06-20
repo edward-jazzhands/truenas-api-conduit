@@ -372,18 +372,12 @@ class LinuxService(BaseService):
         # STANDALONE = "standalone"
         # DOCKER = "docker"
 
-        if lock_dict := core.read_lockfile():
-            log.debug(
-                "Found lockfile with:\n" "PID: %s\nAddress: %s\nPort: %s\n App Env: %s",
-                lock_dict["pid"],
-                lock_dict["address"],
-                lock_dict["socket_port"],
-                lock_dict["app_env"],
-            )
+        if lockfile_obj := core.read_lockfile():
+            log.debug("Found %s", lockfile_obj)
 
             pid_alive = False
             try:
-                os.kill(lock_dict["pid"], 0)  # signal 0 = existence check
+                os.kill(lockfile_obj.pid, 0)  # signal 0 = existence check
                 pid_alive = True
             except ProcessLookupError:
                 pid_alive = False
@@ -395,12 +389,12 @@ class LinuxService(BaseService):
                 log.debug("PID check passed")
 
             if pid_alive:
-                return core.AppEnv(lock_dict["app_env"])
+                return core.AppEnv(lockfile_obj.app_env)
             else:
                 log.warning(
                     "Lockfile references PID %s which is no longer running. "
                     "Deleting stale lockfile.",
-                    lock_dict["pid"],
+                    lockfile_obj.pid,
                 )
                 if result := core.delete_lockfile():
                     log.error("Failed to delete stale lockfile: %s", result)

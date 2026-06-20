@@ -5,14 +5,18 @@
 
 # Configuration precedence (Highest priority to lowest):
 #     1. CLI options            (Overrides everything else)
-#     2. Secrets Manager        (Overrides env vars)
-#     2. Environment variables  (Overrides config file)
-#     3. Config file            (Overrides default values)
-#     4. Default values         (Used if no other source is provided)
+#     2. Environment variables
+#     3. Config file
+#     4. Secrets Manager
+#     5. Docker Secrets
+#     6. Default values         (Used if no other source is provided)
 
 # NOTE: Settings marked (REQUIRED) have no default value. If they are 
 # not supplied here, via an environment variable, or via the CLI, 
 # the program will fail to start and display a validation error.
+
+# See the documentation for more information on each setting:
+# ! ADD LINK HERE WHEN READY
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -20,11 +24,12 @@
 # without the "https://" prefix.
 # This MUST be the HTTPS address, not the HTTP address!
 # You MUST have HTTPS enabled on the TrueNAS Web UI to use the TrueNAS API.
-# If you use a port number you must include it, like "192.168.1.xxx:443".
+# If you use a port number (eg. its not 443), you must include it, for
+# example: "192.168.1.xxx:8443".
 #     Default: None
-#     Equivalent Environment Var: TRUENAS_HOST
+#     Equivalent Environment Var: TRUENAS_ADDRESS
 
-# truenas_host = "192.168.1.xxx:443"
+# truenas_address = "192.168.1.xxx:8443"
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
@@ -41,8 +46,19 @@
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-# The path to the TrueNAS certificate file. This is required if you use a
-# self-signed certificate. If you use a certificate signed by a trusted CA,
+# The address and socket port which the conduit will serve the HTTP REST 
+# server on. This is how you use the sercvice. By default its set to localhost
+# and an arbitrary port. Changing this to 0.0.0.0:<port> will allow the service
+# to be accessed from from over the network.
+#      Default: "localhost:4567"
+#      Equivalent Environment Var: TRUENAS_CONDUIT_HOST
+
+# conduit_host = "localhost:4567"
+
+#  - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+# The path to the TrueNAS certificate file. This is required if you want to use
+# a self-signed certificate. If you use a certificate signed by a trusted CA,
 # you can leave this blank. Alternatively, you can set validate_certs to false.
 #     Default: None
 #     Equivalent Environment Var: TRUENAS_CERT_PATH
@@ -83,37 +99,12 @@
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
 
-# The internal socket port for the TrueNAS API Conduit service. This is used
-# by the CLI to send requests to the service. It's arbitrary and you can
-# change it if you need to.
-#     Default: 4567
-#     Equivalent Environment Var: TRUENAS_SOCKET_PORT
-
-# socket_port = 4567
-
-# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-# The address which the service will serve the local HTTP REST server on.
-#     Default: "localhost"
-#     Equivalent Environment Var: TRUENAS_SERVICE_ADDRESS
-
-# service_address = "localhost"
-
-# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
-# This is only intended for future-proofing, in case the API route ever 
-# changes. This must match what your TrueNAS server currently uses.
-#     Default: "/api/current"
-#     Equivalent Environment Var: TRUENAS_API_ROUTE
-
-# api_route = "/api/current"
-
-# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
-
 # You can set a request header to be required for all requests to the
 # service. This can add an extra layer of security because scripts
-# will need to know what the header is in order to make requests
-# (ie. curl, etc.). The included CLI will use this automatically if set.
+# will need to know what the header is in order to send any command,
+# (including stop, unlock, etc). Note this only applies to the service
+# HTTP endpoints, not controlling it through the OS service manager.
+# The included CLI will use this automatically if set.
 #     Default: None
 #     Equivalent Environment Var: TRUENAS_REQUEST_HEADER
 
@@ -127,8 +118,30 @@
 # because if someone is somehow able to snoop on your open ports,
 # they can't tell if the service is running or not.
 #     Default: false
-#     Equivalent Environment Var: TRUENAS_REQUEST_HEADER
+#     Equivalent Environment Var: TRUENAS_STEALTH_MODE
 
 # stealth_mode = false
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+# If start_locked is true, you'll be required to use your password
+# to unlock the service. This is equivalent to using the --locked
+# option on the CLI start command. If you're using the built-in file
+# encryption to store your API key, and the password is not also
+# stored on the server (.cryptkey file or TRUENAS_CRYPT_KEY env var),
+# the service will start in locked mode automatically.
+#     Default: false
+#     Equivalent Environment Var: TRUENAS_START_LOCKED
+
+# start_locked = false
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -
+
+# This is only intended for future-proofing, in case the API route ever 
+# changes. This must match what your TrueNAS server currently uses.
+#     Default: "/api/current"
+#     Equivalent Environment Var: TRUENAS_API_ROUTE
+
+# api_route = "/api/current"
 
 # - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -

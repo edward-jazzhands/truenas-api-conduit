@@ -40,7 +40,7 @@ services:
       TZ: America/Los_Angeles
       # This MUST be set to 0.0.0.0 to access the service from outside the container"
       TRUENAS_SERVICE_ADDRESS: "0.0.0.0"
-      TRUENAS_HOST: ${TRUENAS_HOST}
+      TRUENAS_ADDRESS: ${TRUENAS_ADDRESS}
       # WARNING: Setting the API key as an env var is generally less secure
       # than setting it in the config file. The most secure option is the
       # crypt key file/env var, utilized by the set-key command in the CLI.

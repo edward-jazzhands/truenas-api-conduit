@@ -10,6 +10,7 @@
 [ ] Create a .rpm package (Fedora)
 [ ] Create a .pkg.tar.zst package (Arch)
 [ ] Create submission for TrueNAS App Marketplace
+[ ] Fix all mypy & pyright errors
 [X] Replace requests lib with aiohttp client
 [?] Integrate systemd-python for better service integration in the service
 [ ] Write unit tests for everything
@@ -21,6 +22,7 @@
 [X] Integrate start locked option into the CLI start command
 [ ] Implement start locked detection based on presence of crypt key
 [X] Add an env command to the CLI to see all env vars and which are currently set
+[ ] Combine service address and service port into a single field in the config
 [ ] Add tracking of which versions of the TrueNAS API the current version is validated against (this should very rarely change)
 [X] Improve the completions command to be more robust and show the correct shell
 [X] write status options to separate/toggle OS status message passthrough

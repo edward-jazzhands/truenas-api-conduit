@@ -9,7 +9,7 @@ import rich_click as click
 from rich.panel import Panel
 
 # project
-from truenas_api_conduit import log_setup
+from truenas_api_conduit import logging_manager
 import truenas_api_conduit.core as core
 from truenas_api_conduit.console import console_stderr, set_no_color
 
@@ -25,10 +25,12 @@ __all__ = [
 class CLIOptions:
 
     verbose: int = 0
+    truenas_address: str | None = None
+    conduit_host: str | None = None
     api_key: bool | None = None
     crypt_key: str | None = None
     start_locked: bool | None = None
-    truenas_host: str | None = None
+    validate_certs: bool | None = None
     no_color: bool | None = None
     pretty: bool | None = None
 
@@ -64,7 +66,7 @@ def logging_setup(ctx: click.RichContext) -> None:
     if ctx.obj.verbose > 1:
         console_stderr.print(ctx.obj)
 
-    log_setup.init_logging()
+    logging_manager.init_logging()
 
     log_mapping = logging.getLevelNamesMapping()
     log_level: int = logging.getLogger().level  # starts at WARNING
@@ -82,7 +84,7 @@ def logging_setup(ctx: click.RichContext) -> None:
         else:
             log_level = log_mapping["TRACE"]  # 5
 
-    log_setup.set_log_level(log_level)
+    logging_manager.set_log_level(log_level)
 
 
 def prompt_for_config() -> None:

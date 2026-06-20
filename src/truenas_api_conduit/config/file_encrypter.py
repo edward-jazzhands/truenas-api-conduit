@@ -26,7 +26,7 @@ from truenas_api_conduit.core import (
     CRYPT_KEY_PATH,
     CRYPT_FILE_NAME,
     SLASH,
-    CRYPT_KEY_ENV,
+    ENV,
 )
 from truenas_api_conduit.console import console_stderr
 from truenas_api_conduit import COLORS
@@ -89,7 +89,7 @@ class FileEncrypter(KeyringBackend):
             "there is no other keyring backend available. You will be prompted "
             "to enter an encryption key to store and retrieve your API key.\n"
             "There's several ways you can avoid this warning:\n"
-            f"- Set the [{COLORS.envvar}]{CRYPT_KEY_ENV}[default] environment variable\n"
+            f"- Set the [{COLORS.envvar}]{ENV['crypt_key']}[default] environment variable\n"
             f"- Create a [{COLORS.envvar}]{CRYPT_FILE_NAME}[default] file in the config "
             f"dir. (The [{COLORS.command}]set-key[default] command in the CLI will "
             f"offer to create a {CRYPT_FILE_NAME} file for you)\n"
@@ -154,7 +154,7 @@ class FileEncrypter(KeyringBackend):
                     attempts += 1
                     if attempts < ALLOWED:
                         continue
-                self._handle_password_get_error(e, service, username)
+                return self._handle_password_get_error(e, service, username)
 
     def _get_password(self, service: str, username: str) -> str | None:
 
@@ -206,8 +206,13 @@ class FileEncrypter(KeyringBackend):
         kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(), length=32, salt=salt, iterations=480000
         )
+
+        # NOTE: self.crypt_key would be set if the crypt key was passed in as a
+        # constructor argument to the Config class. This isn't a CLI option,
+        # it's used by the unlock command.
         if self.crypt_key:
             crypt_key = self.crypt_key.get_secret_value()
+            self.crypt_key = None  # remove after using
         else:
             crypt_key = self._get_crypt_key(service, username)
 
@@ -229,9 +234,10 @@ class FileEncrypter(KeyringBackend):
                 "\nEnter encryption key for secret: "
                 f"[{COLORS.envvar}]{service}.{username}[default]"
             )
-            crypt_key = getpass.getpass(stream=sys.stderr)
-            self.crypt_key = SecretStr(crypt_key)
-            return self.crypt_key.get_secret_value()
+            return getpass.getpass(stream=sys.stderr)
+            # crypt_key = getpass.getpass(stream=sys.stderr)
+            # self.crypt_key = SecretStr(crypt_key)
+            # return self.crypt_key.get_secret_value()
         else:
             raise NotATTYError("No env var set and stdin is not a TTY")
 
@@ -257,8 +263,9 @@ class FileEncrypter(KeyringBackend):
         # not found.
         if e.err_code == GetErrorEnum.NOT_A_TTY:
             log.warning(
-                "Could not find a stored encryption key and stdin is not a TTY. "
-                "There's no way to use the FileEncrypter keyring backend."
+                "There's an encrypted API key stored, but could not find the "
+                "encryption key, and stdin is not a TTY, so the user cannot be "
+                "prompted for it."
             )
             return
         elif e.err_code == GetErrorEnum.VAULT_FILE_NOT_FOUND:
@@ -282,7 +289,7 @@ class FileEncrypter(KeyringBackend):
             "To start the service automatically (ie. at login), you'll need to "
             "get this encryption key into the program. You can do this by:\n"
             f"  1. Setting the environment variable "
-            f"\\[env: [{COLORS.envvar}]{CRYPT_KEY_ENV}[default]=] "
+            f"\\[env: [{COLORS.envvar}]{ENV['crypt_key']}[default]=] "
             "(ensure it is set before the service starts)\n"
             f"  2. Creating a file named [{COLORS.envvar}]{CRYPT_FILE_NAME}[default] "
             "in your config directory containing the encryption key "
@@ -302,10 +309,10 @@ class FileEncrypter(KeyringBackend):
     @staticmethod
     def get_crypt_key() -> SecretStr | None:
 
-        crypt_key = os.environ.get(CRYPT_KEY_ENV)
+        crypt_key = os.environ.get(ENV["crypt_key"])
         if crypt_key is not None:
             crypt_key = SecretStr(crypt_key)
-            log.debug("Found {CRYPT_KEY_ENV} in environment: %s", crypt_key)
+            log.debug("Found %s in environment: %s", ENV["crypt_key"], crypt_key)
         else:
             if CRYPT_KEY_PATH.exists():
                 try:

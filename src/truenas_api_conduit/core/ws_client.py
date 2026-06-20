@@ -16,7 +16,7 @@ import websockets.exceptions as ws_exceptions
 # project
 from truenas_api_conduit import APP_NAME
 from truenas_api_conduit.app_globals import app_globals
-from truenas_api_conduit.core import examine_os_error
+from truenas_api_conduit.core import examine_os_error, ENV
 from truenas_api_conduit.errors import ConduitError
 from truenas_api_conduit.config import Config
 from truenas_api_conduit.core.conn_diag import ConnDiag, run_connection_diagnostic
@@ -217,12 +217,12 @@ class TrueNASClient:
         return {
             "client-status": client_status,
             "connected": connected,
+            "conduit_host": self.config.conduit_host if self.config else None,
             "client-server ping": ping,
             "service mode": app_env,
             "req_id": self.req_id,
             "websocket host": self.ws_conn._host if self.ws_conn else None,
             "websocket port": self.ws_conn._port if self.ws_conn else None,
-            "socket_port": self.config.socket_port if self.config else None,
             "websocket secure": self.ws_conn._secure if self.ws_conn else None,
             "truenas_cert_path": self.config.truenas_cert_path if self.config else None,
             "validate_certs": self.config.validate_certs if self.config else None,
@@ -589,7 +589,7 @@ class TrueNASClient:
         except (ws_exceptions.InvalidURI, socket.gaierror) as e:
             err_str = (
                 f"Address resolution error: {e} {e.__class__} | Most likely cause is the "
-                f"address for TRUENAS_HOST is not correct "
+                f"address for {ENV['truenas_address']} is not correct "
             )
             await self._error_handler(err_str, e)
         else:

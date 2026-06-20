@@ -27,10 +27,11 @@ from pydantic_settings import (
 )
 
 # project
-from truenas_api_conduit import log_setup, APP_NAME
+from truenas_api_conduit import APP_NAME
+from truenas_api_conduit.log_setup import logging_manager
 from truenas_api_conduit.app_globals import app_globals
 from truenas_api_conduit.console import set_no_color
-from truenas_api_conduit.core import CONFIG_PATH
+from truenas_api_conduit.core import CONFIG_PATH, ENV
 from truenas_api_conduit.config.keyring_source import (
     KeyringSettingsSource,
     KeyringField,
@@ -142,30 +143,33 @@ class AppBaseConfig(BaseSettings):
 
         # Priority follows the order of the tuple:
         # 1. CLI flags passed into constructor
-        # 2. Keyring/Secrets Manager
-        # 3. Environment variables
-        # 4. Config file
+        # 2. Environment variables
+        # 3. Config file
+        # 4. Keyring/Secrets Manager
         # 5. File secrets (mostly for Docker secrets but not exclusively)
         # 6. Config class defaults
         return (
-            TrackingInitSource(settings_cls, init_processed),
-            TrackingKeyringSource(settings_cls, service=APP_NAME, skip=skip),
+            TrackingInitSource(settings_cls, init_settings.init_kwargs),
             TrackingEnvSource(settings_cls),
             TrackingTomlSource(settings_cls),
+            TrackingKeyringSource(settings_cls, service=APP_NAME, skip=skip),
             TrackingSecretsSource(settings_cls),
         )
 
-    # These 5 fields are the only ones needed to start up the aiohttp
+    # These fields are the ones needed to start up the aiohttp
     # server. This allows it to start up independently of putting in
-    # the API key and other host config vars.
+    # the API key and other server config vars.
 
     log_level: str = "warning"
     no_color: bool = Field(default=False, validation_alias="NO_COLOR")
-    socket_port: int = 4567
-    service_address: str = "localhost"
+    conduit_host: str = "localhost:4567"
     request_header: str | None = None
     stealth_mode: bool = False
     start_locked: bool = False
+    truenas_address: str = Field(default=..., validation_alias="TRUENAS_ADDRESS")
+    # NOTE: truenas_address was moved here only to give better error messages.
+    # Its not needed for the locked state. But it needs to be here for the user
+    # to see the error messages regarding it when they start the app in locked mode.
 
     @property
     def provenance(self) -> dict[str, str]:
@@ -179,17 +183,71 @@ class AppBaseConfig(BaseSettings):
             raise ValueError(f"log_level must be one of {valid}, got {v!r}")
         return v.lower()
 
+    @field_validator("conduit_host")
+    @classmethod
+    def validate_conduit_host(cls, v: str) -> str:
+        if ":" not in v:
+            raise ValueError("Conduit host address must be in the format of 'host:port'")
+        elif v.count(":") > 1:
+            raise ValueError("Conduit host address must not contain more than one ':'")
+        _host, port = v.split(":")
+        int(port)
+        return v
+
+    @field_validator("truenas_address", mode="before")
+    @classmethod
+    def truenas_address_missing(cls, v: str) -> str:
+        # NOTE: validators that check if the value has been set at all
+        # need to have the before mode in order to show the use our
+        # custom ValueError, otherwise it would just show the default
+        # pedantic error
+        if not v:
+            raise ValueError(
+                "You need to set a value for your TrueNAS server's address. You can set "
+                "it in one of the following ways:\n"
+                "  1. In the config file\n"
+                f"  2. As an environment variable [env: {ENV['truenas_address']}=]\n"
+                "  3. Using the --truenas-address option on the command line."
+            )
+        return v
+
+    @field_validator("truenas_address")
+    @classmethod
+    def truenas_address_used_placeholder(cls, v: str) -> str:
+        if v == "192.168.1.xxx:443":
+            raise ValueError(
+                "You need to enter a value for your TrueNAS server's address. The value "
+                "which you enabled in the config file is only for demonstration. You can "
+                f"also set it as an environment variable ({ENV['truenas_address']}), or using the "
+                "--truenas-address option in the CLI (see start --help)."
+            )
+        return v
+
+    @field_validator("truenas_address")
+    @classmethod
+    def truenas_address_clean_prefix(cls, v: str) -> str:
+        if v.startswith("http://"):
+            raise ValueError(
+                "You have entered an HTTP address for your TrueNAS server instead of an "
+                "HTTPS address. This is strictly forbidden, TrueNAS will delete your API "
+                "key if any attempt is made to do this (That's not my doing that's "
+                "just how TrueNAS works)."
+            )
+        if v.startswith("https://"):
+            return v.removeprefix("https://")
+        return v
+
     def model_post_init(self, _context: Any) -> None:
 
         log_mapping = logging.getLevelNamesMapping()
-        log_setup.set_log_level(log_mapping[self.log_level.upper()])
+        logging_manager.set_log_level(log_mapping[self.log_level.upper()])
         log.info("Config post init: log_level set to %s", self.log_level)
 
         if self.no_color:
             log.info("Config post init: Disabling color output")
             set_no_color()
 
-        for field, _value in Config.model_fields.items():
+        for field, _value in AppBaseConfig.model_fields.items():
             if field not in self.provenance:
                 self.provenance[field] = "default"
 
@@ -212,9 +270,9 @@ class Config(AppBaseConfig):
 
     # NOTE: Because we have env_settings in the sources, Pydantic will look for
     # env variables with the same name as each field, with the env_prefix="TRUENAS_".
-    # `api_key` would be TRUENAS_API_KEY, `log_level` would be TRUENAS_LOG_LEVE, etc.
-    # The two exceptions are at the top: `truenas_host`, which will use the alias
-    # "TRUENAS_HOST", because otherwise it would be TRUENAS_TRUENAS_HOST. The same
+    # `api_key` would be TRUENAS_API_KEY, `log_level` would be TRUENAS_LOG_LEVEL, etc.
+    # The two exceptions are at the top: `truenas_address`, which will use the alias
+    # "TRUENAS_ADDRESS", because otherwise it would be TRUENAS_TRUENAS_ADDRESS. The same
     # goes for `truenas_cert_path`.
 
     # Oh there's also now a third validation alias: "NO_COLOR". This is because
@@ -226,7 +284,6 @@ class Config(AppBaseConfig):
     # It signals to Pyright that Pydantic will take care of the validation.
 
     # User settings
-    truenas_host: str = Field(default=..., validation_alias="TRUENAS_HOST")
     truenas_cert_path: str | None = Field(
         default=None, validation_alias="TRUENAS_CERT_PATH"
     )
@@ -241,7 +298,7 @@ class Config(AppBaseConfig):
     # in the model dump. It's only used internally.
     @property
     def uri(self) -> str:
-        return f"wss://{self.truenas_host}{self.api_route}"
+        return f"wss://{self.truenas_address}{self.api_route}"
 
     # field_validator decorator docs:
     # https://pydantic.dev/docs/validation/latest/concepts/validators/#json-schema-and-field-validators
@@ -262,49 +319,6 @@ class Config(AppBaseConfig):
             return secret.get_secret_value()
         return secret
 
-    @field_validator("truenas_host", mode="before")
-    @classmethod
-    def truenas_host_missing(cls, v: str) -> str:
-        # NOTE: validators that check if the value has been set at all
-        # need to have the before mode in order to show the use our
-        # custom ValueError, otherwise it would just show the default
-        # pedantic error
-        if not v:
-            raise ValueError(
-                "You need to set a value for your TrueNAS server's address. You can set "
-                "it in one of the following ways:\n"
-                "  1. In the config file\n"
-                "  2. As an environment variable [env: TRUENAS_HOST=]\n"
-                "  3. Using the --truenas-host option on the command line."
-            )
-        return v
-
-    @field_validator("truenas_host")
-    @classmethod
-    def truenas_host_used_placeholder(cls, v: str) -> str:
-        if v == "192.168.1.xxx:443":
-            raise ValueError(
-                "You need to enter a value for your TrueNAS server's address. The value "
-                "which you enabled in the config file is only for demonstration. You can "
-                "also set it as an environment variable (TRUENAS_HOST), or using the "
-                "--truenas-host option in the CLI (see start --help)."
-            )
-        return v
-
-    @field_validator("truenas_host")
-    @classmethod
-    def truenas_host_clean_prefix(cls, v: str) -> str:
-        if v.startswith("http://"):
-            raise ValueError(
-                "You have entered an HTTP address for your TrueNAS server instead of an "
-                "HTTPS address. This is strictly forbidden, TrueNAS will delete your API "
-                "key if any attempt is made to do this (That's not my doing that's "
-                "just how TrueNAS works)."
-            )
-        if v.startswith("https://"):
-            return v.removeprefix("https://")
-        return v
-
     @field_validator("api_key", mode="before")
     @classmethod
     def validate_api_key(cls, v: str) -> str:
@@ -314,7 +328,7 @@ class Config(AppBaseConfig):
                 "it in one of the following ways:\n"
                 "  1. Using the set-key command in the CLI\n"
                 "  2. Using the --api-key option in the CLI (see start --help)."
-                "  3. As an environment variable [env: TRUENAS_API_KEY=]\n"
+                f"  3. As an environment variable [env: {ENV['api_key']}=]\n"
                 "  4. In the config file (least secure)\n"
             )
         return v
@@ -324,3 +338,17 @@ class Config(AppBaseConfig):
     # @classmethod
     # def expand_storage_path(cls, v: Any) -> Path:
     #     return Path(v).expanduser()
+
+    def model_post_init(self, _context: Any) -> None:
+
+        log_mapping = logging.getLevelNamesMapping()
+        logging_manager.set_log_level(log_mapping[self.log_level.upper()])
+        log.info("Config post init: log_level set to %s", self.log_level)
+
+        if self.no_color:
+            log.info("Config post init: Disabling color output")
+            set_no_color()
+
+        for field, _value in Config.model_fields.items():
+            if field not in self.provenance:
+                self.provenance[field] = "default"

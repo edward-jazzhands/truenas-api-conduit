@@ -1,20 +1,25 @@
 import json
-from typing import Any
 import logging
+from dataclasses import dataclass
 from truenas_api_conduit import LOCK_FILE
 
 log = logging.getLogger(__name__)
 
 
-def read_lockfile() -> dict[str, Any] | None:
+@dataclass
+class Lockfile:
+    pid: int
+    address: str
+    header: str | None
+    app_env: str
+
+
+def read_lockfile() -> Lockfile | None:
 
     try:
         with open(LOCK_FILE, "r") as f:
             lock_dict = json.loads(f.read())
-        int(lock_dict["pid"])
-        str(lock_dict["address"])
-        int(lock_dict["socket_port"])
-        return lock_dict
+        return Lockfile(**lock_dict)
     except FileNotFoundError:
         log.info("Did not find a lock file")
         return

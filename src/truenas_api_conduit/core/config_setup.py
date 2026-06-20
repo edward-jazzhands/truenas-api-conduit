@@ -19,7 +19,10 @@ from truenas_api_conduit.cli_helpers import (
     make_usage_error_panel,
     require_tty,
 )
-import truenas_api_conduit.core as core
+
+# import truenas_api_conduit.core as core
+from truenas_api_conduit.core import CONFIG_PATH, ENV, ensure_config, ensure_storage_dir
+
 from truenas_api_conduit.console import console_stderr
 
 log = logging.getLogger(__name__)
@@ -31,8 +34,8 @@ __all__ = [
 
 def shared_config_setup(cli_options: CLIOptions) -> None:
 
-    if not core.CONFIG_PATH.exists():
-        if not cli_options.api_key or not cli_options.truenas_host:
+    if not CONFIG_PATH.exists():
+        if not cli_options.api_key or not cli_options.truenas_address:
             log.warning(
                 "The config file has not been created yet, it's probably "
                 "your first time starting the service. If your server address "
@@ -43,58 +46,89 @@ def shared_config_setup(cli_options: CLIOptions) -> None:
 
     # NOTE: Remember that the config file/dir must be ensured before trying to
     # import the user_config module:
-    core.ensure_config()  # Raises if failure
-    core.ensure_storage_dir()
+    ensure_config()  # Raises if failure
+    ensure_storage_dir()
 
 
-def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
-
-    shared_config_setup(cli_options)
-
-    # Pydantic will not be loaded until this following import. Its one
-    # of the heavier dependencies so this improves startup time marginally.
-    from truenas_api_conduit.config import Config
-
-    # only used by the start command
-    if cli_options.api_key:
-        log.debug("Prompting for API key")
-        require_tty("API key")
-        api_key = click.prompt("Enter your TrueNAS API key", hide_input=True)
-    else:
-        api_key = None
-
-    #! is this code ever reached?
-    if cli_options.start_locked:
-        log.info("Starting in locked mode")
-
-    # only used by the print-config command
-    # NOTE: The point of this is so that the user won't be triggered to enter
-    # the password for their keyring/secret manager unless they set --unmask.
-    # It just tricks pydantic into thinking the API key was passed in through
-    # CLI args and thus will skip the keyring/secret manager.
-    if unmask is False:
-        api_key = "*" * 10
+def get_config_args_dict(
+    cli_options: CLIOptions, unmask: bool | None = None
+) -> dict[str, Any]:
 
     level_name = logging.getLevelName(logging.getLogger().level)
 
     # Creating an args dict because we only want to pass in the args that the user
     # passed in through the CLI. You can't pass None values to the Config class because
     # it would treat "None" as the desired value, instead of treating it as missing.
-    to_filter: dict[str, Any] = {
-        "log_level": level_name if level_name.upper() != "WARNING" else None,
-        "no_color": cli_options.no_color,
-        "truenas_host": cli_options.truenas_host,
-        "api_key": api_key,
-        "crypt_key": cli_options.crypt_key,
-        "start_locked": cli_options.start_locked,
-    }
-    args_dict = {k: v for k, v in to_filter.items() if v is not None}
-    log.debug("Config args: %s", args_dict)
 
     # NOTE: on the log level: warning is already the default set in the pydantic
     # settings class. If the user didn't pass -v/--verbose, we want to pass None
     # instead of "warning" in order to let pydantic-settings try to pull it from
     # the env var or the config file, before falling back to the default.
+
+    to_filter: dict[str, Any] = {
+        "log_level": level_name if level_name.upper() != "WARNING" else None,
+        "no_color": cli_options.no_color,
+        "start_locked": cli_options.start_locked,
+        "conduit_host": cli_options.conduit_host,
+    }
+
+    if cli_options.start_locked:
+        log.info("Starting in locked mode")
+
+        args_dict = {k: v for k, v in to_filter.items() if v is not None}
+        log.debug("Config args: %s", args_dict)
+        return args_dict
+
+    else:
+        # Remember that start_locked is mutually exclusive with api_key
+
+        # only used by the start command
+        if cli_options.api_key:
+            log.debug("Prompting for API key")
+            require_tty("API key")
+            api_key = click.prompt("Enter your TrueNAS API key", hide_input=True)
+        else:
+            api_key = None
+
+        # only used by the print-config command
+        # NOTE: The point of this is so that the user won't be triggered to enter
+        # the password for their keyring/secret manager unless they set --unmask.
+        # It just tricks pydantic into thinking the API key was passed in through
+        # CLI args and thus will skip the keyring/secret manager.
+        if unmask is False:
+            api_key = "*" * 10
+
+        to_add_to_filter: dict[str, Any] = {
+            "truenas_address": cli_options.truenas_address,
+            "validate_certs": cli_options.validate_certs,
+            "api_key": api_key,
+            "crypt_key": cli_options.crypt_key,
+        }
+        to_filter.update(to_add_to_filter)
+        args_dict = {k: v for k, v in to_filter.items() if v is not None}
+        log.debug("Config args: %s", args_dict)
+        return args_dict
+
+
+def pretty_print_config(cfg: Config | AppBaseConfig) -> str:
+
+    config_str = ""
+    for field, value in cfg.model_dump().items():
+        new_section = f"\n{field}: {value}"
+        new_section += " " * (37 - len(new_section))
+        new_section += f"(from {cfg.provenance[field]})"
+        config_str += new_section
+    return config_str
+
+
+def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
+
+    # Pydantic will not be loaded until this following import. Its one
+    # of the heavier dependencies so this improves startup time marginally.
+    from truenas_api_conduit.config import Config
+
+    shared_config_setup(cli_options)
+    args_dict = get_config_args_dict(cli_options, unmask)
 
     try:
         cfg = Config(**args_dict)
@@ -103,37 +137,17 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
         sys.exit(1)  # this line will never be reached, but typechecker doesn't know that
 
     log.info("Config loaded successfully")
-    config_str = ""
-    for field, value in cfg.model_dump().items():
-        new_section = f"\n{field}: {value}"
-        new_section += " " * (35 - len(new_section))
-        new_section += f"(from {cfg.provenance[field]})"
-        config_str += new_section
-    log.info(config_str)
+    log.info(pretty_print_config(cfg))
     return cfg
 
 
 def config_setup_locked(cli_options: CLIOptions) -> AppBaseConfig:
 
-    shared_config_setup(cli_options)
-
-    # Pydantic will not be loaded until this following import. Its one
-    # of the heavier dependencies so this improves startup time marginally.
     from truenas_api_conduit.config import AppBaseConfig
 
-    if cli_options.start_locked:
-        log.info("Starting in locked mode")
+    shared_config_setup(cli_options)
 
-    level_name = logging.getLevelName(logging.getLogger().level)
-
-    to_filter: dict[str, Any] = {
-        "log_level": level_name if level_name.upper() != "WARNING" else None,
-        "no_color": cli_options.no_color,
-        "start_locked": cli_options.start_locked,
-    }
-    args_dict = {k: v for k, v in to_filter.items() if v is not None}
-
-    log.debug("Config args: %s", args_dict)
+    args_dict = get_config_args_dict(cli_options)
 
     try:
         cfg = AppBaseConfig(**args_dict)
@@ -142,13 +156,7 @@ def config_setup_locked(cli_options: CLIOptions) -> AppBaseConfig:
         sys.exit(1)  # this line will never be reached, but typechecker doesn't know that
 
     log.info("AppBaseConfig loaded successfully")
-    config_str = ""
-    for field, value in cfg.model_dump().items():
-        new_section = f"\n{field}: {value}"
-        new_section += " " * (35 - len(new_section))
-        new_section += f"(from {cfg.provenance[field]})"
-        config_str += new_section
-    log.info(config_str)
+    log.info(pretty_print_config(cfg))
     return cfg
 
 
@@ -201,12 +209,12 @@ def handle_config_error(e: Exception) -> None:
 
 
 field_help_dict = {
-    "truenas_host": (
+    "truenas_address": (
         "\n\n[default]You need to set a value for your TrueNAS server's address. You "
         "can set it in one of the following ways:\n"
         "  1. In the config file\n"
-        f"  2. As an environment variable [env: [{COLORS.envvar}]TRUENAS_HOST[default]=]\n"
-        f"  3. Using the [{COLORS.command}]--truenas-host[default] option in the CLI "
+        f"  2. As an environment variable [env: [{COLORS.envvar}]{ENV['truenas_address']}[default]=]\n"
+        f"  3. Using the [{COLORS.command}]--truenas-address[default] option in the CLI "
         f"(see [{COLORS.command}]start --help[default])"
     ),
     "api_key": (
@@ -215,7 +223,7 @@ field_help_dict = {
         f"  1. Using the [{COLORS.command}]set-key[default] command in the CLI\n"
         f"  2. Using the [{COLORS.command}]--api-key[default] option in the CLI "
         f"(see [{COLORS.command}]start --help[default])\n"
-        f"  3. As an environment variable [env: [{COLORS.envvar}]TRUENAS_API_KEY[default]=]\n"
+        f"  3. As an environment variable [env: [{COLORS.envvar}]{ENV['api_key']}[default]=]\n"
         "  4. In the config file (least secure)"
     ),
 }

@@ -13,7 +13,7 @@ pytestmark = pytest.mark.asyncio
 def mock_config():
     
     cfg = Mock()
-    cfg.truenas_host = "192.168.1.100"
+    cfg.truenas_address = "192.168.1.100"
     cfg.truenas_port = 6000
     cfg.api_key = Mock()
     cfg.api_key.get_secret_value = Mock(return_value="test-api-key-12345")
@@ -32,7 +32,7 @@ def mock_config():
 def mock_env_vars():
 
     return {
-        "TRUENAS_HOST": "192.168.1.100:6000",
+        "TRUENAS_ADDRESS": "192.168.1.100:6000",
         "TRUENAS_API_KEY": "test-api-key-12345",
         "TRUENAS_CERT_PATH": None,
         "TRUENAS_VALIDATE_CERTS": "false",

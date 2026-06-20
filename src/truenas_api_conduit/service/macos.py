@@ -89,7 +89,7 @@ class MacOSService(BaseService):
     def restart(self) -> None:
         pass
 
-    def status(self, forward_stdout: bool = True) -> int:
+    def status(self, forward_stdout: bool = True, suppress_output: bool = False) -> int:
         return 0
 
     def detect_service(self) -> core.AppEnv:

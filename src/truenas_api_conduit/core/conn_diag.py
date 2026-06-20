@@ -88,9 +88,9 @@ class ConnDiag:
 
     def msg(self, value):
         if value is True:
-            return "[bright_green]PASSED[default]"
+            return "PASSED"
         elif value is False:
-            return "[bright_red]FAILED[default]"
+            return "FAILED"
         else:
             return "N/A"
 
@@ -109,19 +109,19 @@ async def run_connection_diagnostic(
 ) -> AsyncGenerator[tuple[str, bool | None], None]:
     """This is a generator so it can stream the test results back one at a time."""
 
-    if ":" in config.truenas_host:
-        host, port = config.truenas_host.split(":")
+    if ":" in config.truenas_address:
+        host, port = config.truenas_address.split(":")
     else:
         # NOTE: The address for the TrueNAS websocket API is always the
         # same as the web UI's HTTPS address, with /api/current at the end.
-        host = config.truenas_host
+        host = config.truenas_address
         port = 443
 
     diag_tests = {
         "has_internet": partial(simple_socket_check, "8.8.8.8", 53),
         "socket_check": partial(simple_socket_check, host, int(port)),
         "ping_check": partial(use_ping_tool, host),
-        "curl_check": partial(curl_test, config.truenas_host, config.api_route),
+        "curl_check": partial(curl_test, config.truenas_address, config.api_route),
     }
 
     loop = asyncio.get_running_loop()

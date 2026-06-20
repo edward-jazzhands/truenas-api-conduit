@@ -17,14 +17,10 @@ if TYPE_CHECKING:
 # third party
 from aiohttp import web
 
-# from aiohttp.web_runner import GracefulExit
-
 # project
 from truenas_api_conduit import APP_NAME, SERVICENAME
 from truenas_api_conduit.core import examine_os_error
-import truenas_api_conduit.log_setup as log_setup
 
-log_setup.init_logging()
 log = logging.getLogger(__name__)
 
 
@@ -77,6 +73,7 @@ def check_locked_mode(request: web.Request) -> None | web.Response:
     if client:
         return
 
+    log.warning("Got request but app is locked")
     cfg: Config | AppBaseConfig = request.app["config"]
     if cfg.stealth_mode:
         return STEALTH_RESPONSE
@@ -163,11 +160,24 @@ async def restart(request: web.Request) -> web.Response:
     if security_fail := security_checks(request):
         return security_fail
 
-    async def _restart() -> None:
+    try:
+        payload = await request.json()  # JSON-RPC payload
+    except json.JSONDecodeError as e:
+        log.error("Malformed request, skipping: %s", e)
+        return web.json_response({"error": "Malformed request"}, status=400)
+
+    log.info("Restart payload: %s", payload)
+    log.info("Hot restart: %s", payload.get("hot"))
+    log_level = request.app["config"].log_level
+
+    async def hot_restart() -> None:
+
         await asyncio.sleep(0.2)
-        await request.app.cleanup()
 
         cfg_dump = request.app["config"].model_dump_json(context={"unmask": True})
+        await request.app.cleanup()
+
+        os.environ["CONDUIT_HOT_RESTART"] = "1"  #! not needed?
 
         # The execvp Chad Swap. We dump out the config to stdout then pipe that
         # into a new copy of this process. This is necessary because the user
@@ -189,13 +199,32 @@ async def restart(request: web.Request) -> web.Response:
             # for a hot restart, but I don't think that's necessary. Maybe
             # in the future.
             err_string = examine_os_error(e)
-            if request.app["config"].log_level == "trace":
+            if log_level == "trace":
                 raise
             else:
                 log.error("Error restarting service: %s", err_string)
 
-    asyncio.create_task(_restart())
-    return web.json_response({"result": "Restarting the conduit service..."})
+    async def cold_restart() -> None:
+
+        await asyncio.sleep(0.2)
+        await request.app.cleanup()
+
+        try:
+            os.execvp(SERVICENAME, [SERVICENAME])
+        except OSError as e:
+            err_string = examine_os_error(e)
+            if log_level == "trace":
+                raise
+            else:
+                log.error("Error restarting service: %s", err_string)
+
+    if payload.get("hot"):
+        asyncio.create_task(hot_restart())
+        result_msg = "Performing a hot restart..."
+    else:
+        asyncio.create_task(cold_restart())
+        result_msg = "Restarting the conduit service..."
+    return web.json_response({"result": result_msg})
 
 
 async def lock(request: web.Request) -> web.Response:
@@ -265,6 +294,7 @@ async def unlock(request: web.Request) -> web.Response:
         return web.json_response({"result": "Service has been unlocked"})
     else:
         # must be an exception
+        log.warning("Unlock failed: %s", unlock_result)
         return web.json_response(
             {"result": "Unlock failed", "error": str(unlock_result)}, status=400
         )

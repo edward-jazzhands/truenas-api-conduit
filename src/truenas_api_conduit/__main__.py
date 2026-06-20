@@ -18,6 +18,7 @@ from truenas_api_conduit import (
     COLORS,
 )
 import truenas_api_conduit.core as core
+from truenas_api_conduit.core import ENV
 from truenas_api_conduit.console import console_stderr, console_stdout
 from truenas_api_conduit.cli_helpers import (
     CLIOptions,
@@ -155,10 +156,10 @@ verbose_help = f"""Sets the verbosity/logging level.
 [{COLORS.option}]-v[/{COLORS.option}] for info,
 [{COLORS.option}]-vv[/{COLORS.option}] for debug,
 [{COLORS.option}]-vvv[/{COLORS.option}] for trace
-[env:[{COLORS.envvar}] TRUENAS_LOG_LEVEL[default]=]"""
+[env: [{COLORS.envvar}]{ENV['log_level']}[default]=]"""
 
 no_color_help = f"""Disables color output. You must set the environment variable
-to disable color in the help menu [env:[{COLORS.envvar}] NO_COLOR[default]=]"""
+to disable color in the help menu [env: [{COLORS.envvar}]{ENV['no_color']}[default]=]"""
 
 
 # NOTE: When using click.group() as the main command, it will automatically show
@@ -247,45 +248,58 @@ Tip: to run standalone in the background, use:\n
 \n
 (Mac + Linux):  [{COLORS.command}]truenas-api start --standalone & disown[default]\n
 (Windows):      [{COLORS.command}]Start-Process truenas-api start
---standalone[default]"""
+--standalone[default]\n
+\n
+Some of the options for this command can only be used with standalone
+mode. To set them for installed (OS service) mode, use one of the other
+config methods (config file, env vars, set-key command)"""
 
 standalone_help = """Start the service as a standalone program in the foreground (not
 run by your service manager). Does not require installation"""
 
-locked_help = f"""(Only with [{COLORS.command}]--standalone[default])
-Start the service in locked mode. This can only be used if
+locked_help = f"""Start the service in locked mode. This can only be used if
 you've set your API key using the [{COLORS.command}]set-key[default] command.
 It will delay retrieving the API key until the unlock password has been
-provided. You can also set the [{COLORS.envvar}]start_locked[default] field
-in the config file, or set the environment variable
-[env: [{COLORS.envvar}]TRUENAS_START_LOCKED[default]=]"""
+provided  [{COLORS.envvar}]{ENV['start_locked']}[default]=]"""
 
 api_key_help = f"""(Only with [{COLORS.command}]--standalone[default])
-Ask to be prompted for your TrueNAS API key. You can also use the
-[{COLORS.command}]set-key[default] command (recommended), set the
-[{COLORS.envvar}]api_key[default] field in the config file, or set the
-environment variable [env: [{COLORS.envvar}]TRUENAS_API_KEY[default]=]"""
+Ask to be prompted for your TrueNAS API key
+[env: [{COLORS.envvar}]{ENV['api_key']}[default]=]"""
 
-truenas_host_help = f"""(Only with [{COLORS.command}]--standalone[default])
+truenas_address_help = f"""(Only with [{COLORS.command}]--standalone[default])
 The address that you use to access the TrueNAS Web UI over
-HTTPS. You can also set the [{COLORS.envvar}]truenas_host[default]
-field in the config file, or set the environment variable
-[env:[{COLORS.envvar}] TRUENAS_HOST[default]=]"""
+HTTPS [env: [{COLORS.envvar}]{ENV['truenas_address']}[default]=]"""
+
+conduit_host_help = f"""(Only with [{COLORS.command}]--standalone[default])
+The address for the TrueNAS API Conduit service. This will be
+[{COLORS.envvar}]localhost:4567[default] by default
+[env: [{COLORS.envvar}]{ENV['conduit_host']}[default]=]
+"""
+
+validate_certs_help = f"""(Only with [{COLORS.command}]--standalone[default])
+Whether to require the TrueNAS TLS certificate to be valid
+[env: [{COLORS.envvar}]{ENV['validate_certs']}[default]=]"""
 
 
 @cli.command(help=start_help, short_help=start_help_short)
 @click.option("-s", "--standalone", is_flag=True, default=False, help=standalone_help)
-@click.option("-l", "--locked", is_flag=True, default=False, help=locked_help)
+@click.option("-l", "--locked", is_flag=True, default=None, help=locked_help)
 @click.option("-a", "--api-key", is_flag=True, default=None, help=api_key_help)
-@click.option("-h", "--truenas-host", help=truenas_host_help)
+@click.option("-t", "--truenas-address", help=truenas_address_help)
+@click.option("-h", "--host", help=conduit_host_help)
+@click.option(
+    "-vc", "--validate-certs", is_flag=True, default=None, help=validate_certs_help
+)
 @common_options
 @click.pass_context
 def start(
     ctx: click.RichContext,
-    standalone: bool,
-    locked: bool = False,
+    standalone: bool,  # <- this is the only one that's not a config option
+    locked: bool | None = None,
     api_key: bool | None = None,
-    truenas_host: str | None = None,
+    truenas_address: str | None = None,
+    host: str | None = None,
+    validate_certs: bool | None = None,
 ) -> None:
 
     logging_setup(ctx)
@@ -293,26 +307,37 @@ def start(
 
     # standalone + locked = OK
     # standalone + api_key = OK
-    # standalone + truenas_host = OK
+    # standalone + truenas_address = OK
     # locked + api_key = ERROR
-    # locked + truenas_host = ERROR? (might be ok?)
-    # api_key + truenas_host = OK
+    # locked + truenas_address = ERROR? (might be ok?)
+    # api_key + truenas_address = OK
 
-    if (api_key or truenas_host) and not standalone:
-        raise click.UsageError(
-            "You can only use the --api-key and --truenas-host options with --standalone"
-        )
+    standalone_dict = {
+        "api-key": api_key,
+        "truenas-address": truenas_address,
+        "host": host,
+        "validate-certs": validate_certs,
+    }
 
-    if api_key and locked:
-        raise click.UsageError(
-            "You cannot use the --api-key and --locked options together"
-        )
+    if standalone:
+        for key, value in standalone_dict.items():
+            if value:
+                raise click.UsageError(
+                    f"You cannot use the --{key} option with --standalone"
+                )
+
+    # if api_key and locked:
+    #     raise click.UsageError(
+    #         "You cannot use the --api-key and --locked options together"
+    #     )
 
     assert isinstance(ctx.obj, CLIOptions)
 
     ctx.obj.start_locked = locked
     ctx.obj.api_key = api_key
-    ctx.obj.truenas_host = truenas_host
+    ctx.obj.truenas_address = truenas_address
+    ctx.obj.conduit_host = host
+    ctx.obj.validate_certs = validate_certs
 
     from truenas_api_conduit.core.config_setup import config_setup, config_setup_locked
 
@@ -559,7 +584,6 @@ def request(
     assert ctx.console is not None
 
     request_helper = get_request_helper()
-    log.debug(request_helper)
     if not request_helper:
         console_stderr.print(
             make_usage_error_panel("TrueNAS API Conduit service is not running")
@@ -701,7 +725,7 @@ def request(
     if ctx.obj.pretty:
         try:
             jsons = json.loads(response.text)
-            ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
+            ctx.console.print(json.dumps(jsons, indent=2))
         except json.JSONDecodeError as e:
             log.error(
                 "Response from server is not valid JSON: %s | Disable pretty "
@@ -713,7 +737,7 @@ def request(
             else:
                 sys.exit(1)
     else:
-        ctx.console.print(response.text, soft_wrap=True)
+        ctx.console.print(response.text)
 
 
 stop_help = """Stop the conduit service. This will detect if its running
@@ -747,7 +771,6 @@ def stop(ctx: click.RichContext, direct: bool = False) -> None:
     if (detect == core.AppEnv.STANDALONE) or direct:
         # Option 1: Sending a request
         request_helper = get_request_helper()
-        log.debug(request_helper)
         if not request_helper:
             console_stderr.print(
                 make_usage_error_panel("TrueNAS API Conduit service is not running")
@@ -758,7 +781,7 @@ def stop(ctx: click.RichContext, direct: bool = False) -> None:
         if ctx.obj.pretty:
             try:
                 jsons = json.loads(response.text)
-                ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
+                ctx.console.print(json.dumps(jsons, indent=2))
             except json.JSONDecodeError as e:
                 log.error(
                     "Response from server is not valid JSON: %s | Disable pretty "
@@ -770,7 +793,7 @@ def stop(ctx: click.RichContext, direct: bool = False) -> None:
                 else:
                     sys.exit(1)
         else:
-            ctx.console.print(response.text, soft_wrap=True)
+            ctx.console.print(response.text)
 
     elif detect == core.AppEnv.OS_SERVICE:
         try:
@@ -804,19 +827,26 @@ def stop(ctx: click.RichContext, direct: bool = False) -> None:
         assert_never(detect)
 
 
-restart_help = """Restart the conduit service. This will detect if its running
+restart_help_short = """Restart the conduit service. This will detect if its running
 as an OS service or in standalone mode and send the restart request accordingly"""
 
-restart_direct_help = """Force the restart request to go directly to the service,
-bypassing the OS service manager (only relevant if installed, standalone
-mode does this automatically)"""
+restart_help = """Restart the conduit service. This will detect if its running
+as an OS service or in standalone mode and send the restart request accordingly.\n
+If running in standalone (or if you sent a direct request), this will perform a
+'hot' restart which will maintain its current config instead of reloading (and thus
+won't pick up any changes you've made)"""
+
+hot_restart_help = f"""Perform a hot restart. This will NOT reload the configuration
+from any sources, and instead will restart the service with the current config.
+This is useful if you passed in some options using the
+[{COLORS.command}]start[default] command, and you want them to persist"""
 
 
-@cli.command(help=restart_help)
-@click.option("-d", "--direct", is_flag=True, default=False, help=restart_direct_help)
+@cli.command(help=restart_help, short_help=restart_help_short)
+@click.option("-h", "--hot", is_flag=True, default=False, help=hot_restart_help)
 @common_options
 @click.pass_context
-def restart(ctx: click.RichContext, direct: bool = False) -> None:
+def restart(ctx: click.RichContext, hot: bool = False) -> None:
 
     logging_setup(ctx)
     assert ctx.console is not None
@@ -829,21 +859,24 @@ def restart(ctx: click.RichContext, direct: bool = False) -> None:
     service = get_service_manager(core.PLATFORM)
     detect = service.detect_service()
     log.info("Service mode is: %s", detect)
+    if service.status(forward_stdout=False, suppress_output=True) in (0, 3):
+        log.warning("Service is currently stopped, this will start it")
 
-    if (detect == core.AppEnv.STANDALONE) or direct:
+    if (detect == core.AppEnv.STANDALONE) or hot:
         request_helper = get_request_helper()
-        log.debug(request_helper)
         if not request_helper:
             console_stderr.print(
                 make_usage_error_panel("TrueNAS API Conduit service is not running")
             )
             sys.exit(1)
-        response = request_helper(core.Endpoints.RESTART, {})  # empty dict to post
+        response = request_helper(
+            core.Endpoints.RESTART, {"hot": hot}
+        )  # empty dict to post
 
         if ctx.obj.pretty:
             try:
                 jsons = json.loads(response.text)
-                ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
+                ctx.console.print(json.dumps(jsons, indent=2))
             except json.JSONDecodeError as e:
                 log.error(
                     "Response from server is not valid JSON: %s | Disable pretty "
@@ -855,7 +888,7 @@ def restart(ctx: click.RichContext, direct: bool = False) -> None:
                 else:
                     sys.exit(1)
         else:
-            ctx.console.print(response.text, soft_wrap=True)
+            ctx.console.print(response.text)
 
     elif detect == core.AppEnv.OS_SERVICE:
         try:
@@ -904,7 +937,6 @@ def lock(ctx: click.RichContext) -> None:
     assert isinstance(ctx.obj, CLIOptions)
 
     request_helper = get_request_helper()
-    log.debug(request_helper)
     if not request_helper:
         console_stderr.print(
             make_usage_error_panel("TrueNAS API Conduit service is not running")
@@ -915,7 +947,7 @@ def lock(ctx: click.RichContext) -> None:
     if ctx.obj.pretty:
         try:
             jsons = json.loads(response.text)
-            ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
+            ctx.console.print(json.dumps(jsons, indent=2))
         except json.JSONDecodeError as e:
             log.error(
                 "Response from server is not valid JSON: %s | Disable pretty "
@@ -927,7 +959,7 @@ def lock(ctx: click.RichContext) -> None:
             else:
                 sys.exit(1)
     else:
-        ctx.console.print(response.text, soft_wrap=True)
+        ctx.console.print(response.text)
 
 
 unlock_help_short = """Unlock the service"""
@@ -945,7 +977,6 @@ def unlock(ctx: click.RichContext) -> None:
     assert isinstance(ctx.obj, CLIOptions)
 
     request_helper = get_request_helper()
-    log.debug(request_helper)
     if not request_helper:
         console_stderr.print(
             make_usage_error_panel("TrueNAS API Conduit service is not running")
@@ -958,7 +989,7 @@ def unlock(ctx: click.RichContext) -> None:
     if ctx.obj.pretty:
         try:
             jsons = json.loads(response.text)
-            ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
+            ctx.console.print(json.dumps(jsons, indent=2))
         except json.JSONDecodeError as e:
             log.error(
                 "Response from server is not valid JSON: %s | Disable pretty "
@@ -970,7 +1001,7 @@ def unlock(ctx: click.RichContext) -> None:
             else:
                 sys.exit(1)
     else:
-        ctx.console.print(response.text, soft_wrap=True)
+        ctx.console.print(response.text)
 
 
 status_help_short = """Check the status/ping of the conduit service"""
@@ -1001,13 +1032,13 @@ def status(ctx: click.RichContext, system: bool = False) -> None:
     if not system:
         # 1: Sending a request
         request_helper = get_request_helper()
-        log.debug(request_helper)
         if request_helper:
             response = request_helper(core.Endpoints.STATUS)
             if ctx.obj.pretty:
                 try:
                     jsons = json.loads(response.text)
-                    ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
+                    ctx.console.print(json.dumps(jsons, indent=2))
+                    running = True
                 except json.JSONDecodeError as e:
                     log.error(
                         "Response from server is not valid JSON: %s | Disable pretty "
@@ -1019,7 +1050,7 @@ def status(ctx: click.RichContext, system: bool = False) -> None:
                     else:
                         sys.exit(1)
             else:
-                ctx.console.print(response.text, soft_wrap=True)
+                ctx.console.print(response.text)
                 running = True
         else:  # no request helper
             ctx.console.print("TrueNAS API Conduit service is not running")
@@ -1032,16 +1063,16 @@ def status(ctx: click.RichContext, system: bool = False) -> None:
         detect = service.detect_service()
         log.info("Service mode is: %s", detect)
 
-        if detect == core.AppEnv.STANDALONE:
-            # Not installed, just exit
-            sys.exit(1)
-
         if system and (detect != core.AppEnv.OS_SERVICE):
             console_stderr.print(
                 make_usage_error_panel(
                     "--system can only be used with the service in OS mode"
                 )
             )
+            sys.exit(1)
+
+        if detect == core.AppEnv.STANDALONE:
+            log.warning("The service last reported running in standalone mode")
             sys.exit(1)
 
         try:
@@ -1136,14 +1167,14 @@ is available on your system.\n
 If there is no keyring backend available (ie. you're running in some minimal or
 headless environment), the program will fall back to writing the API key to an
 encrypted file in your storage directory. If this happens, the program will
-look for the [{COLORS.envvar}]{core.CRYPT_KEY_ENV}[default] environment variable.
+look for the [{COLORS.envvar}]{ENV['crypt_key']}[default] environment variable.
 If available, it will use that as the encryption key to avoid prompting you (thus
 making it possible to start the service through scripts/non-interactive environments).\n
 If this env var is NOT set, the program will prompt you for the encryption key
 when you run the
 [{COLORS.command}]set-key[default] command, as well as every time the service
 starts up. This would be unsuitable for starting at boot or other such automations
-[env: [{COLORS.envvar}]{core.CRYPT_KEY_ENV}[default]=]
+[env: [{COLORS.envvar}]{ENV['crypt_key']}[default]=]
 """
 
 delete_help = "Delete the API key from the current keyring backend."
@@ -1303,7 +1334,7 @@ def set_key(
 
 
 config_help = f"""Attempts to open the config file in your editor, if
-[env: [{COLORS.envvar}]EDITOR[default]=] is set. Contains options to print
+[env: [{COLORS.envvar}]{ENV['editor']}[default]=] is set. Contains options to print
 the path to the config file, or print the config to stdout, etc."""
 
 print_path_help = "Print the path to the config file (you can pipe this)"
@@ -1440,7 +1471,7 @@ def reference(ctx: click.RichContext) -> None:
 
     cfg = config_setup(ctx.obj)
 
-    ctx.console.print(f"https://{cfg.truenas_host}/api/docs/current")
+    ctx.console.print(f"https://{cfg.truenas_address}/api/docs/current")
 
 
 version_help = """Print the version of the TrueNAS API Conduit service"""
@@ -1542,5 +1573,5 @@ def env(ctx: click.RichContext) -> None:
     logging_setup(ctx)
     assert ctx.console is not None
 
-    for k in core.ENV_VARS:
-        ctx.console.print(f"{k}: {os.environ.get(k)}")
+    for v in ENV.values():
+        ctx.console.print(f"{v}: {os.environ.get(v)}")

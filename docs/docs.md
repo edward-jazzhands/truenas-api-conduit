@@ -46,7 +46,7 @@ See the [Docker section](#docker--docker-compose) below.
 ### Directly
 
 ```sh
-export TRUENAS_HOST=192.168.1.100
+export TRUENAS_ADDRESS=192.168.1.100
 export TRUENAS_API_KEY=your-api-key-here
 
 truenas-conduit start

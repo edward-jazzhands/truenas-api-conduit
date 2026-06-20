@@ -15,7 +15,7 @@ from truenas_api_conduit.core.setup_app_dir import (
     ensure_storage_dir as _ensure_storage_dir,
 )
 from truenas_api_conduit.core.os_error import examine_os_error
-from truenas_api_conduit.core.read_lockfile import read_lockfile
+from truenas_api_conduit.core.read_lockfile import read_lockfile, Lockfile
 
 __all__ = [
     "ensure_config",
@@ -27,8 +27,10 @@ __all__ = [
     "CONFIG_PATH",
     "examine_os_error",
     "read_lockfile",
+    "Lockfile",
     "CRYPT_KEY_PATH",
     "CRYPT_FILE_NAME",
+    "ENV",
 ]
 
 
@@ -56,23 +58,22 @@ class AppEnv(Enum):
     DOCKER = "docker"
 
 
-ENV_VARS: list[str] = [
-    "TRUENAS_HOST",
-    "TRUENAS_API_KEY",
-    "TRUENAS_CERT_PATH",
-    "TRUENAS_VALIDATE_CERTS",
-    "TRUENAS_LOG_LEVEL",
-    "TRUENAS_SOCKET_PORT",
-    "TRUENAS_SERVICE_ADDRESS",
-    "TRUENAS_API_ROUTE",
-    "TRUENAS_REQUEST_HEADER",
-    "TRUENAS_STEALTH_MODE",
-    "TRUENAS_CRYPT_KEY",
-    "TRUENAS_START_LOCKED",
-    "RICH_CLICK_THEME",
-    "NO_COLOR",
-    "EDITOR",
-]
+ENV: Final[dict[str, str]] = {
+    "truenas_address": "TRUENAS_ADDRESS",
+    "api_key": "TRUENAS_API_KEY",
+    "truenas_cert_path": "TRUENAS_CERT_PATH",
+    "validate_certs": "TRUENAS_VALIDATE_CERTS",
+    "log_level": "TRUENAS_LOG_LEVEL",
+    "conduit_host": "TRUENAS_CONDUIT_HOST",
+    "api_route": "TRUENAS_API_ROUTE",
+    "request_header": "TRUENAS_REQUEST_HEADER",
+    "stealth_mode": "TRUENAS_STEALTH_MODE",
+    "crypt_key": "TRUENAS_CRYPT_KEY",
+    "start_locked": "TRUENAS_START_LOCKED",
+    "rich_click_theme": "RICH_CLICK_THEME",
+    "no_color": "NO_COLOR",
+    "editor": "EDITOR",
+}
 
 
 def detect() -> Platform:
@@ -125,7 +126,6 @@ STORAGE_DIR: Final[Path] = Path(platformdirs.user_data_dir(APP_NAME))
 
 CRYPT_FILE_NAME: Final[str] = ".cryptkey"
 CRYPT_KEY_PATH: Final[Path] = CONFIG_DIR / CRYPT_FILE_NAME
-CRYPT_KEY_ENV: Final[str] = "TRUENAS_CRYPT_KEY"
 
 
 def ensure_storage_dir() -> None:

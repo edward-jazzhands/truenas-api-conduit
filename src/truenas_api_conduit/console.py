@@ -6,15 +6,9 @@ from rich.console import Console
 # RichHandler would both create their own consoles.
 
 console_stderr = Console(stderr=True)
-console_stdout = Console(stderr=False)
+console_stdout = Console(stderr=False, soft_wrap=True)
 
 
 def set_no_color() -> None:
     console_stderr.no_color = True
     console_stdout.no_color = True
-
-
-# ! not used anymore
-def set_max_width(width: int) -> None:
-    console_stderr.width = min(width, console_stderr.size.width)
-    console_stdout.width = min(width, console_stdout.size.width)
