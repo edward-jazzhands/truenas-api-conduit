@@ -5,6 +5,7 @@ if TYPE_CHECKING:
     from truenas_api_conduit.config.user_config import Config
 
 import truenas_api_conduit.core as core
+from truenas_api_conduit.os_service.base import BaseService, ServiceError
 
 
 class WindowsService(BaseService):

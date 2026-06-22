@@ -194,7 +194,6 @@ def client_startup(cfg: Config, app: web.Application):
     # NOTE: This method creates and manages its own background task with
     # asyncio.create_task.
     task = client.start()
-    # task.add_done_callback(lambda _t: app["shutdown_event"].set())
 
     callback_partial = partial(client_closed, app=app)
     task.add_done_callback(callback_partial)
@@ -280,7 +279,7 @@ async def truenas_context_manager(app: web.Application):
         if result := core.delete_lockfile():
             log.error("Failed to delete lockfile: %s", result)
 
-        client: TrueNASClient | None = app["truenas_client"]
+        client: TrueNASClient | None = app.get("truenas_client")
         if client:
             close_result = await client.close()
             log.debug(close_result)
@@ -359,6 +358,12 @@ async def main(cfg: AppBaseConfig, json_dict: dict[str, Any] | None = None) -> N
 
 def error_handler(err_string: str, log_level: str, e: BaseException):
 
+    log.error(
+        "Uncaught exception reached top-level exception handler."
+        "This usually indicates a software bug or an unexpected condition the "
+        "application could not safely handle. "
+        "The application will now exit."
+    )
     if log_level.lower() == "trace":
         log.error(err_string)
         raise e

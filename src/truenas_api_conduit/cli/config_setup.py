@@ -14,7 +14,7 @@ import rich_click as click
 
 # project
 from truenas_api_conduit import COLORS
-from truenas_api_conduit.cli_helpers import (
+from truenas_api_conduit.cli.cli_helpers import (
     CLIOptions,
     make_usage_error_panel,
     require_tty,
@@ -54,19 +54,12 @@ def get_config_args_dict(
     cli_options: CLIOptions, unmask: bool | None = None
 ) -> dict[str, Any]:
 
-    level_name = logging.getLevelName(logging.getLogger().level)
-
     # Creating an args dict because we only want to pass in the args that the user
     # passed in through the CLI. You can't pass None values to the Config class because
     # it would treat "None" as the desired value, instead of treating it as missing.
 
-    # NOTE: on the log level: warning is already the default set in the pydantic
-    # settings class. If the user didn't pass -v/--verbose, we want to pass None
-    # instead of "warning" in order to let pydantic-settings try to pull it from
-    # the env var or the config file, before falling back to the default.
-
     to_filter: dict[str, Any] = {
-        "log_level": level_name if level_name.upper() != "WARNING" else None,
+        "log_level": cli_options.log_level,
         "no_color": cli_options.no_color,
         "start_locked": cli_options.start_locked,
         "conduit_host": cli_options.conduit_host,
@@ -80,7 +73,8 @@ def get_config_args_dict(
         return args_dict
 
     else:
-        # Remember that start_locked is mutually exclusive with api_key
+        # * Remember that start_locked is mutually exclusive with api_key
+        # (subject to change?)
 
         # only used by the start command
         if cli_options.api_key:

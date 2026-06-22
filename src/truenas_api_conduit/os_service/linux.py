@@ -14,7 +14,7 @@ from typing import Final
 # local
 from truenas_api_conduit import APP_NAME, SERVICENAME
 import truenas_api_conduit.core as core
-from truenas_api_conduit.service.base import BaseService, ServiceError
+from truenas_api_conduit.os_service.base import BaseService, ServiceError
 from truenas_api_conduit.console import console_stdout  # , console_stderr
 
 # NOTE: log messages are configured to go to stderr

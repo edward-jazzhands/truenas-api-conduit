@@ -1,11 +1,12 @@
 # standard library
 import json
 import os
+import sys
 import logging
 import asyncio
-import sys
 from enum import Enum
-from typing import TYPE_CHECKING, Final
+from functools import partial
+from typing import TYPE_CHECKING, Final, cast
 
 if TYPE_CHECKING:
     # ws_client contains the import for the websockets library so we gain
@@ -69,7 +70,7 @@ def check_request_header(request: web.Request) -> None | web.Response:
 def check_locked_mode(request: web.Request) -> None | web.Response:
     "None = UNLOCKED | web.Response = LOCKED"
 
-    client: TrueNASClient | None = request.app["truenas_client"]
+    client: TrueNASClient | None = request.app.get("truenas_client")
     if client:
         return
 
@@ -117,7 +118,7 @@ async def request_handler(request: web.Request) -> web.Response:
 
     log.info("Request payload: %s", payload)
 
-    client: TrueNASClient = request.app["truenas_client"]
+    client: TrueNASClient = request.app.get("truenas_client")
     assert client is not None
     result = await client.call(payload)
     log.info("Request successful")
@@ -135,7 +136,7 @@ async def status(request: web.Request) -> web.Response:
     if security_fail := security_checks(request):
         return security_fail
 
-    client: TrueNASClient = request.app["truenas_client"]
+    client: TrueNASClient = request.app.get("truenas_client")
     result = await client.status()
     log.info("Status request successful")
     return web.json_response(result)
@@ -170,29 +171,29 @@ async def restart(request: web.Request) -> web.Response:
     log.info("Hot restart: %s", payload.get("hot"))
     log_level = request.app["config"].log_level
 
-    async def hot_restart() -> None:
+    client: TrueNASClient | None = request.app.get("truenas_client")
+    request.app["locked"] = True
 
-        await asyncio.sleep(0.2)
+    venv_bin_dir = os.path.dirname(sys.executable)
+    daemon_path = os.path.join(venv_bin_dir, SERVICENAME)
 
-        cfg_dump = request.app["config"].model_dump_json(context={"unmask": True})
-        await request.app.cleanup()
+    async def hot_restart(cfg_dump: str) -> None:
 
         os.environ["CONDUIT_HOT_RESTART"] = "1"  #! not needed?
+        await asyncio.sleep(0.2)
 
-        # The execvp Chad Swap. We dump out the config to stdout then pipe that
+        # The execv Chad Swap. We dump out the config to stdout then pipe that
         # into a new copy of this process. This is necessary because the user
         # may have started the service using the CLI in standalone mode or otherwise
         # started the service by piping a custom config into it. So we preserve
         # whatever they passed in when restarting.
-        executable = sys.executable
-        log.debug("Executable: %s", executable)
         try:
             read_fd, write_fd = os.pipe()
             os.write(write_fd, cfg_dump.encode())
             os.close(write_fd)
             os.dup2(read_fd, 0)
             os.close(read_fd)
-            os.execvp(SERVICENAME, [SERVICENAME])
+            os.execv(daemon_path, [SERVICENAME])
         except OSError as e:
             # HACK: If there's an error then the service will just die after
             # attempting to restart. Theoretically I could whip up a mechanism
@@ -207,10 +208,8 @@ async def restart(request: web.Request) -> web.Response:
     async def cold_restart() -> None:
 
         await asyncio.sleep(0.2)
-        await request.app.cleanup()
-
         try:
-            os.execvp(SERVICENAME, [SERVICENAME])
+            os.execv(daemon_path, [SERVICENAME])
         except OSError as e:
             err_string = examine_os_error(e)
             if log_level == "trace":
@@ -218,12 +217,50 @@ async def restart(request: web.Request) -> web.Response:
             else:
                 log.error("Error restarting service: %s", err_string)
 
+    good_msg = "The TrueNAS websocket client closed itself gracefully"
+
+    # I believe this string should always get overwritten, if there was no client
+    # then the service would have been locked:
+    result_msg = "No client to close, attempting to restart the conduit service..."
+
     if payload.get("hot"):
-        asyncio.create_task(hot_restart())
-        result_msg = "Performing a hot restart..."
+
+        cfg_dump = request.app["config"].model_dump_json(context={"unmask": True})
+
+        # NOTE: When the client closes, the task will finish, and the task finished
+        # callback will run. Since we set app["locked"] to True, the program will
+        # lock the service and stay open in locked mode. We need this for the
+        # os.execvp command to work.
+        if client:
+            close_result = await client.close()
+            log.debug(close_result)
+            # NOTE: remember when we do an execvp swap, the server is not being given
+            # a chance to run its cleanup tasks. So the normal cleanup in the
+            # context manager will not run here.
+
+            if close_result.is_closed:
+                log.info(good_msg)
+                result_msg = good_msg + " | Performing a hot restart..."
+            else:
+                log.warning(close_result.msg)
+                result_msg = (
+                    close_result.msg + " | Attempting to restart the conduit service..."
+                )
+
+        asyncio.create_task(hot_restart(cfg_dump=cfg_dump))
+
     else:
+        if client:
+            close_result = await client.close()
+            log.debug(close_result)
+            if close_result.is_closed:
+                log.info(good_msg)
+                result_msg = good_msg + " | Restarting the conduit service..."
+            else:
+                log.warning(close_result.msg)
+
         asyncio.create_task(cold_restart())
-        result_msg = "Restarting the conduit service..."
+
     return web.json_response({"result": result_msg})
 
 
@@ -242,7 +279,7 @@ async def lock(request: web.Request) -> web.Response:
 
     log.info("Request payload: %s", payload)
 
-    client: TrueNASClient | None = request.app["truenas_client"]
+    client: TrueNASClient | None = request.app.get("truenas_client")
     request.app["locked"] = True
     if client:
         if client.config:
@@ -254,8 +291,9 @@ async def lock(request: web.Request) -> web.Response:
         else:
             log.warning(close_result.msg)
 
-    request.app["truenas_client"] = None
-    request.app["truenas_task"] = None
+    # NOTE: remember when the client task finishes, the task finished callback
+    # will run and remove the client from the app.
+
     return web.json_response({"result": "Service has been locked"})
 
 

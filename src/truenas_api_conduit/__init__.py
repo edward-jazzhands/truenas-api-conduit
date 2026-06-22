@@ -1,11 +1,14 @@
+# standard library
 from typing import Final
 from importlib.metadata import version
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+# third-party
 from rich.traceback import install as tb_install
 
+# project
 from truenas_api_conduit.log_setup import logging_manager
 from truenas_api_conduit.console import console_stderr
 
@@ -18,8 +21,12 @@ __all__ = [
     "COLORS",
 ]
 
-# rich tracebacks
-tb_install(console=console_stderr, show_locals=False)
+
+@dataclass(frozen=True)
+class COLORS:
+    command: str = "deep_sky_blue1"
+    envvar: str = "orange1"
+    option: str = "bold cyan"
 
 
 APP_NAME: Final[str] = "truenas-api-conduit"
@@ -34,9 +41,5 @@ LOCK_FILE: Final[Path] = Path(tempfile.gettempdir()) / f"{APP_NAME}.lock"
 
 __version__: Final[str] = version(APP_NAME)
 
-
-@dataclass(frozen=True)
-class COLORS:
-    command: str = "deep_sky_blue1"
-    envvar: str = "orange1"
-    option: str = "bold cyan"
+# rich tracebacks
+tb_install(console=console_stderr, show_locals=False)

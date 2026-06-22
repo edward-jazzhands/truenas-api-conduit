@@ -31,6 +31,7 @@ class CLIOptions:
     crypt_key: str | None = None
     start_locked: bool | None = None
     validate_certs: bool | None = None
+    log_level: str | None = None
     no_color: bool | None = None
     pretty: bool | None = None
 

@@ -19,16 +19,17 @@ from truenas_api_conduit import (
 )
 import truenas_api_conduit.core as core
 from truenas_api_conduit.core import ENV
+from truenas_api_conduit.i18n import _
 from truenas_api_conduit.console import console_stderr, console_stdout
-from truenas_api_conduit.cli_helpers import (
+from truenas_api_conduit.cli.cli_helpers import (
     CLIOptions,
     logging_setup,
     make_usage_error_panel,
     make_success_panel,
     prompt_for_config,
 )
-from truenas_api_conduit.request_helper import get_request_helper
-from truenas_api_conduit.service import get_service_manager, ServiceError
+from truenas_api_conduit.cli.request_helper import get_request_helper
+from truenas_api_conduit.os_service import get_service_manager, ServiceError
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +42,7 @@ click.rich_click.THEME = "cargo-modern"
 # nord, dracula, and solarized are "risky" according to the docs.
 
 
-def handle_exit(*_):
+def handle_exit(*__):
     console_stderr.print("\nCancelling.")
     sys.exit(0)
 
@@ -104,6 +105,16 @@ def set_no_color_param(ctx: click.Context, param: click.Parameter, value: bool) 
     return value
 
 
+verbose_help = f"""Sets the verbosity level for the CLI. Note this does not
+affect the conduit service.
+[{COLORS.option}]-v[/{COLORS.option}] for info,
+[{COLORS.option}]-vv[/{COLORS.option}] for debug,
+[{COLORS.option}]-vvv[/{COLORS.option}] for tracebacks"""
+
+no_color_help = f"""Disables color output. You must set the environment variable
+to disable color in the help menu [env: [{COLORS.envvar}]{ENV['no_color']}[default]=]"""
+
+
 def common_options(f: Callable) -> Callable:
     f = click.option(
         "-v",
@@ -139,6 +150,11 @@ def set_pretty_param(ctx: click.Context, param: click.Parameter, value: bool) ->
     return value
 
 
+pretty_help = f"""Format the JSON response to be human-readable. Alternatively
+you can pipe the response into
+[{COLORS.command}]jq[default] (can be faster)"""
+
+
 def request_options(f: Callable) -> Callable:
     f = click.option(
         "-fmt",
@@ -150,20 +166,6 @@ def request_options(f: Callable) -> Callable:
         help=pretty_help,
     )(f)
     return f
-
-
-verbose_help = f"""Sets the verbosity/logging level.
-[{COLORS.option}]-v[/{COLORS.option}] for info,
-[{COLORS.option}]-vv[/{COLORS.option}] for debug,
-[{COLORS.option}]-vvv[/{COLORS.option}] for trace
-[env: [{COLORS.envvar}]{ENV['log_level']}[default]=]"""
-
-no_color_help = f"""Disables color output. You must set the environment variable
-to disable color in the help menu [env: [{COLORS.envvar}]{ENV['no_color']}[default]=]"""
-
-
-# NOTE: When using click.group() as the main command, it will automatically show
-# the --help message when no subcommands are specified.
 
 
 class CustomGroup(DYMMixin, click.RichGroup):  # Adds click-didyoumean
@@ -212,6 +214,9 @@ This will hold the websocket connection open so that subsequent requests can
 re-use the same connection. It can be installed as a service, or run as a
 standalone program without installing.\n
 Most of the commands have more info in their respective help menus"""
+
+# NOTE: When using click.group() as the main command, it will automatically show
+# the --help message when no subcommands are specified.
 
 
 @click.group(cls=CustomGroup, context_settings=context, help=main_help)
@@ -280,6 +285,9 @@ validate_certs_help = f"""(Only with [{COLORS.command}]--standalone[default])
 Whether to require the TrueNAS TLS certificate to be valid
 [env: [{COLORS.envvar}]{ENV['validate_certs']}[default]=]"""
 
+log_level_help = f"""Set the logging level for the service.
+[env: [{COLORS.envvar}]{ENV['log_level']}[default]=]"""
+
 
 @cli.command(help=start_help, short_help=start_help_short)
 @click.option("-s", "--standalone", is_flag=True, default=False, help=standalone_help)
@@ -287,6 +295,12 @@ Whether to require the TrueNAS TLS certificate to be valid
 @click.option("-a", "--api-key", is_flag=True, default=None, help=api_key_help)
 @click.option("-t", "--truenas-address", help=truenas_address_help)
 @click.option("-h", "--host", help=conduit_host_help)
+@click.option(
+    "-log",
+    "--log-level",
+    help=log_level_help,
+    type=click.Choice(["trace", "debug", "info", "warning", "error"]),
+)
 @click.option(
     "-vc", "--validate-certs", is_flag=True, default=None, help=validate_certs_help
 )
@@ -300,6 +314,7 @@ def start(
     truenas_address: str | None = None,
     host: str | None = None,
     validate_certs: bool | None = None,
+    log_level: str | None = None,
 ) -> None:
 
     logging_setup(ctx)
@@ -317,6 +332,7 @@ def start(
         "truenas-address": truenas_address,
         "host": host,
         "validate-certs": validate_certs,
+        "log-level": log_level,
     }
 
     if standalone:
@@ -326,6 +342,7 @@ def start(
                     f"You cannot use the --{key} option with --standalone"
                 )
 
+    #! TODO: test if this is necessary
     # if api_key and locked:
     #     raise click.UsageError(
     #         "You cannot use the --api-key and --locked options together"
@@ -338,8 +355,9 @@ def start(
     ctx.obj.truenas_address = truenas_address
     ctx.obj.conduit_host = host
     ctx.obj.validate_certs = validate_certs
+    ctx.obj.log_level = log_level
 
-    from truenas_api_conduit.core.config_setup import config_setup, config_setup_locked
+    from truenas_api_conduit.cli.config_setup import config_setup, config_setup_locked
 
     if standalone:
 
@@ -355,6 +373,16 @@ def start(
         os.environ["TRUENAS_APP_ENV"] = core.AppEnv.STANDALONE.value
         if locked:
             os.environ["TRUENAS_START_LOCKED"] = "true"
+
+        # We know the daemon entrypoint will always be in the same directory as the
+        # current python executable. This is just how python packaging works. The daemon
+        # and the CLI are both included in the package so they will both always be beside
+        # each other. That's true in an isolated venv or in a system/global install.
+        # Even if its installed as a "UV tool" and has an executable placed in /usr/bin
+        # or something, that's actually just a shortcut to the real one in the program venv,
+        # which, UV will store in its tools directory.
+        venv_bin_dir = os.path.dirname(sys.executable)
+        daemon_path = os.path.join(venv_bin_dir, SERVICENAME)
 
         try:
             # file descriptors are just indices into the process's open file table,
@@ -383,11 +411,11 @@ def start(
             # already holds the pipe, so you don't need two references to it.
             os.close(read_fd)
 
-            # * This shall henceforth be known as The execvp stdin Chad Swap
+            # * This shall henceforth be known as The execv stdin Chad Swap
 
             # The new program inherits all open file descriptors, including fd 0,
             # which it now sees as normal stdin
-            os.execvp(SERVICENAME, [SERVICENAME])
+            os.execv(daemon_path, [SERVICENAME])
         except OSError as e:
             err_string = core.examine_os_error(e)
             if cfg.log_level == "trace":
@@ -449,7 +477,7 @@ def install(ctx: click.RichContext) -> None:
         console_stderr.print("Cancelled")
         sys.exit(1)
 
-    from truenas_api_conduit.core.config_setup import config_setup
+    from truenas_api_conduit.cli.config_setup import config_setup
 
     cfg = config_setup(ctx.obj)
     service = get_service_manager(core.PLATFORM)
@@ -491,7 +519,7 @@ def uninstall(ctx: click.RichContext) -> None:
         console_stderr.print("Cancelled")
         sys.exit(1)
 
-    from truenas_api_conduit.core.config_setup import config_setup
+    from truenas_api_conduit.cli.config_setup import config_setup
 
     cfg = config_setup(ctx.obj)
     service = get_service_manager(core.PLATFORM)
@@ -552,10 +580,6 @@ filters_help = f"""Add a filter to the request. Filters are in the form of
 [{COLORS.envvar}]FIELD OPERATOR VALUE[default]. For example:
 [{COLORS.option}]--filter name = sda[/{COLORS.option}]
 """
-
-pretty_help = f"""Format the JSON response to be human-readable. Alternatively
-you can pipe the response into
-[{COLORS.command}]jq[default] (can be faster)"""
 
 
 @cli.command(help=request_help, short_help=request_help_short)
@@ -725,7 +749,7 @@ def request(
     if ctx.obj.pretty:
         try:
             jsons = json.loads(response.text)
-            ctx.console.print(json.dumps(jsons, indent=2))
+            ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
         except json.JSONDecodeError as e:
             log.error(
                 "Response from server is not valid JSON: %s | Disable pretty "
@@ -781,7 +805,7 @@ def stop(ctx: click.RichContext, direct: bool = False) -> None:
         if ctx.obj.pretty:
             try:
                 jsons = json.loads(response.text)
-                ctx.console.print(json.dumps(jsons, indent=2))
+                ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
             except json.JSONDecodeError as e:
                 log.error(
                     "Response from server is not valid JSON: %s | Disable pretty "
@@ -831,22 +855,25 @@ restart_help_short = """Restart the conduit service. This will detect if its run
 as an OS service or in standalone mode and send the restart request accordingly"""
 
 restart_help = """Restart the conduit service. This will detect if its running
-as an OS service or in standalone mode and send the restart request accordingly.\n
-If running in standalone (or if you sent a direct request), this will perform a
-'hot' restart which will maintain its current config instead of reloading (and thus
-won't pick up any changes you've made)"""
+as an OS service or in standalone mode and send the restart request accordingly."""
 
-hot_restart_help = f"""Perform a hot restart. This will NOT reload the configuration
-from any sources, and instead will restart the service with the current config.
-This is useful if you passed in some options using the
-[{COLORS.command}]start[default] command, and you want them to persist"""
+direct_help = """Send the restart request directly to the service, bypassing the
+OS service manager (only relevant if installed, standalone mode does this
+automatically)"""
+
+hot_restart_help = f"""Perform a hot restart (implies --direct). This will NOT
+reload the configuration from any sources, and instead will restart the service with
+the current config. This is useful if you passed in some options using the
+[{COLORS.command}]start[default] command, and you want them to persist, or if
+you don't want to enter your unlock password again"""
 
 
 @cli.command(help=restart_help, short_help=restart_help_short)
+@click.option("-d", "--direct", is_flag=True, default=False, help=direct_help)
 @click.option("-h", "--hot", is_flag=True, default=False, help=hot_restart_help)
 @common_options
 @click.pass_context
-def restart(ctx: click.RichContext, hot: bool = False) -> None:
+def restart(ctx: click.RichContext, direct: bool = False, hot: bool = False) -> None:
 
     logging_setup(ctx)
     assert ctx.console is not None
@@ -862,7 +889,7 @@ def restart(ctx: click.RichContext, hot: bool = False) -> None:
     if service.status(forward_stdout=False, suppress_output=True) in (0, 3):
         log.warning("Service is currently stopped, this will start it")
 
-    if (detect == core.AppEnv.STANDALONE) or hot:
+    if (detect == core.AppEnv.STANDALONE) or direct or hot:
         request_helper = get_request_helper()
         if not request_helper:
             console_stderr.print(
@@ -876,7 +903,7 @@ def restart(ctx: click.RichContext, hot: bool = False) -> None:
         if ctx.obj.pretty:
             try:
                 jsons = json.loads(response.text)
-                ctx.console.print(json.dumps(jsons, indent=2))
+                ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
             except json.JSONDecodeError as e:
                 log.error(
                     "Response from server is not valid JSON: %s | Disable pretty "
@@ -924,7 +951,22 @@ def restart(ctx: click.RichContext, hot: bool = False) -> None:
 
 lock_help_short = """Lock the service"""
 
-lock_help = """Lock the service"""
+lock_help = f"""Lock the service. Once locked, you'll be required to use your
+API key password to unlock the service.\n
+\n
+This is only possible if you've set your API key using the
+[{COLORS.command}]set-key[default] command, which will store your TrueNAS API
+key in your OS secret manager or fall back to using the built-in file encryption
+if that is not available.\n
+\n
+If you've set your API key using the [{COLORS.command}]set-key[default] command,
+and the service cannot get the password automatically (ie. you don't have it
+stored on the server for security reasons), the service will start in locked mode
+automatically.\n
+
+See the [{COLORS.command}]set-key[default] command for more info on how to set
+your API key password.\n
+"""
 
 
 @cli.command(help=lock_help, short_help=lock_help_short)
@@ -947,7 +989,7 @@ def lock(ctx: click.RichContext) -> None:
     if ctx.obj.pretty:
         try:
             jsons = json.loads(response.text)
-            ctx.console.print(json.dumps(jsons, indent=2))
+            ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
         except json.JSONDecodeError as e:
             log.error(
                 "Response from server is not valid JSON: %s | Disable pretty "
@@ -964,7 +1006,8 @@ def lock(ctx: click.RichContext) -> None:
 
 unlock_help_short = """Unlock the service"""
 
-unlock_help = """Unlock the service"""
+unlock_help = """Unlock the service. See the [{COLORS.command}]lock[default]
+command for more info on how to lock the service."""
 
 
 @cli.command(help=unlock_help, short_help=unlock_help_short)
@@ -989,7 +1032,7 @@ def unlock(ctx: click.RichContext) -> None:
     if ctx.obj.pretty:
         try:
             jsons = json.loads(response.text)
-            ctx.console.print(json.dumps(jsons, indent=2))
+            ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
         except json.JSONDecodeError as e:
             log.error(
                 "Response from server is not valid JSON: %s | Disable pretty "
@@ -1037,7 +1080,7 @@ def status(ctx: click.RichContext, system: bool = False) -> None:
             if ctx.obj.pretty:
                 try:
                     jsons = json.loads(response.text)
-                    ctx.console.print(json.dumps(jsons, indent=2))
+                    ctx.console.print(json.dumps(jsons, indent=2), soft_wrap=True)
                     running = True
                 except json.JSONDecodeError as e:
                     log.error(
@@ -1384,12 +1427,12 @@ def config(
         )
 
     elif print_config:
-        from truenas_api_conduit.core.config_setup import config_setup
+        from truenas_api_conduit.cli.config_setup import config_setup
 
         cfg = config_setup(ctx.obj, unmask=unmask)
         json_dict = cfg.model_dump_json(indent=2, context={"unmask": unmask})
 
-        ctx.console.print(json_dict)
+        ctx.console.print(json_dict, soft_wrap=True)
         if ctx.obj.verbose == 0:
             console_stderr.print(
                 "\n[italic]Tip: set verbosity/logging to info to see provenance[/italic]",
@@ -1402,6 +1445,7 @@ def config(
                 "Remember you must restart the service to apply any changes",
                 style="italic",
             )
+            # we want execvp here so it scans PATH for the editor by name
             os.execvp(editor, [editor, core.CONFIG_PATH])
         else:
             err_string = (
@@ -1425,7 +1469,7 @@ def cheatsheet(ctx: click.RichContext) -> None:
     logging_setup(ctx)
     assert ctx.console is not None
 
-    from truenas_api_conduit.cheatsheet import get_tables
+    from truenas_api_conduit.cli.cheatsheet import get_tables
 
     ctx.console.print()
     for table in get_tables():
@@ -1467,9 +1511,9 @@ def reference(ctx: click.RichContext) -> None:
         )
         sys.exit(1)
 
-    from truenas_api_conduit.core.config_setup import config_setup
+    from truenas_api_conduit.cli.config_setup import config_setup
 
-    cfg = config_setup(ctx.obj)
+    cfg = config_setup(ctx.obj, unmask=False)
 
     ctx.console.print(f"https://{cfg.truenas_address}/api/docs/current")
 

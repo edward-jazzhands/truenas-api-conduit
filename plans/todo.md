@@ -14,8 +14,12 @@
 [X] Replace requests lib with aiohttp client
 [?] Integrate systemd-python for better service integration in the service
 [ ] Write unit tests for everything
-[ ] Add support for docker Secrets
+[?] Add support for docker Secrets  *need to test*
+[ ] Separate out all the main menu help text into a separate file
 [X] Finish process of moving the settings.toml file to exterior assets
+[ ] Locking feature should only work if the password was set using the set-key command (through keyring)
+[ ] Add a log level setter command
+[ ] Change the -v/--verbose option to only affect the CLI and not the service, likewise make the log level not affect the CLI
 [ ] Add a theme setter command
 [ ] Get all commands working with docker version
 [X] Implement the "start locked" feature

@@ -1,8 +1,5 @@
-from typing import assert_never, TYPE_CHECKING
+from typing import assert_never
 from abc import ABC, abstractmethod
-
-if TYPE_CHECKING:
-    from truenas_api_conduit.config.user_config import Config
 
 import truenas_api_conduit.core as core
 
@@ -58,15 +55,15 @@ def get_service_manager(platform: core.Platform) -> BaseService:
     """
     match platform:
         case core.Platform.LINUX:
-            from truenas_api_conduit.service.linux import LinuxService
+            from truenas_api_conduit.os_service.linux import LinuxService
 
             return LinuxService()
         case core.Platform.WINDOWS:
-            from truenas_api_conduit.service.windows import WindowsService
+            from truenas_api_conduit.os_service.windows import WindowsService
 
             return WindowsService()
         case core.Platform.MACOS:
-            from truenas_api_conduit.service.macos import MacOSService
+            from truenas_api_conduit.os_service.macos import MacOSService
 
             return MacOSService()
         case _:

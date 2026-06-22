@@ -6,7 +6,7 @@ from rich.console import Console
 # RichHandler would both create their own consoles.
 
 console_stderr = Console(stderr=True)
-console_stdout = Console(stderr=False, soft_wrap=True)
+console_stdout = Console(stderr=False)
 
 
 def set_no_color() -> None:
