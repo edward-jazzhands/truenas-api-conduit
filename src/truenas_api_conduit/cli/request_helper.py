@@ -1,6 +1,5 @@
 # standard library
 import sys
-import logging
 import os
 import asyncio
 from typing import Any
@@ -10,10 +9,9 @@ from dataclasses import dataclass
 import psutil
 
 # project
-from truenas_api_conduit import APP_NAME, SERVICENAME
+from truenas_api_conduit.constants import APP_NAME, SERVICENAME, LOCK_FILE, Endpoints
 import truenas_api_conduit.core as core
-
-log = logging.getLogger(__name__)
+from truenas_api_conduit.cli.cli_helpers import cli_print
 
 __all__ = ["get_request_helper", "RequestHelper"]
 
@@ -48,19 +46,19 @@ class RequestHelper:
         return f"RequestHelper(address={self.address}, port={self.port})"
 
     def __call__(
-        self, endpoint: core.Endpoints, json_dict: dict[str, Any] | None = None
+        self, endpoint: Endpoints, json_dict: dict[str, Any] | None = None
     ) -> RawResponse:
         """no json = GET
         pass in json = POST"""
 
-        if endpoint not in core.Endpoints:
+        if endpoint not in Endpoints:
             raise ValueError(f"Invalid endpoint: {endpoint}")
 
-        log.info("Making request")
+        cli_print.info("Making request")
         return asyncio.run(self._make_request(endpoint, json_dict))
 
     async def _make_request(
-        self, endpoint: core.Endpoints, json_dict: dict[str, Any] | None
+        self, endpoint: Endpoints, json_dict: dict[str, Any] | None
     ) -> RawResponse:
         import aiohttp
         import yaspin
@@ -96,10 +94,10 @@ class RequestHelper:
                             status = response.status
 
         except aiohttp.ClientError as e:
-            log.error("Could not connect to TrueNAS API Conduit service: %s", e)
+            cli_print.error("Could not connect to TrueNAS API Conduit service: {e}".format(e=e))
             sys.exit(1)
         except Exception as e:
-            log.error("Unexpected error making request: %s", e)
+            cli_print.error("Unexpected error making request: {e}".format(e=e))
             sys.exit(1)
 
         return RawResponse(status=status, text=text)
@@ -109,7 +107,7 @@ def auto_find_server_config(
     lockfile_obj: core.Lockfile | None, lock_file_bad: bool = False
 ) -> ServerConfig | None:
 
-    log.debug("Auto-finding service port")
+    cli_print.debug("Auto-finding service port")
 
     service_proc: psutil.Process | None = None
     for proc in psutil.process_iter(["pid", "name", "cmdline"]):
@@ -127,19 +125,19 @@ def auto_find_server_config(
 
     if service_proc:
         identifier = get_process_identifier(service_proc)
-        log.debug("Found service with identifier: %s", identifier)
+        cli_print.debug("Found service with identifier: {identifier}".format(identifier=identifier))
 
         if server_config := get_process_httpconfig(service_proc):
             if lock_file_bad:
-                log.warning(
+                cli_print.warning(
                     "Lock file was bad or missing, yet the service is running. "
                     "That's not supposed to happen. Recommended to restart the service"
                 )
             server_config.request_header = lockfile_obj.header if lockfile_obj else None
-            log.debug("Auto-found the server config: %s", server_config)
+            cli_print.debug("Auto-found the server config: {server_config}".format(server_config=server_config))
             return server_config
         else:
-            log.critical("The process is running, but does not have a port open")
+            cli_print.error("The process is running, but does not have a port open")
             return None
     else:
         return None  # This tells us the process is definitely not running
@@ -162,7 +160,7 @@ def get_process_httpconfig(proc: psutil.Process) -> ServerConfig | None:
             if conn.status == psutil.CONN_LISTEN:
                 return ServerConfig(address=conn.laddr.ip, port=conn.laddr.port)
     except psutil.NoSuchProcess, psutil.AccessDenied:
-        log.warning("Could not get process port: %s", proc)
+        cli_print.warning("Could not get process port: {proc}".format(proc=proc))
         return None
 
     return None
@@ -190,10 +188,10 @@ def send_os_signal(pid: int, sig: int = 0) -> bool:
         # just because its owned by root or some other user. Should still work.
         return True
     except ProcessLookupError:
-        log.warning("Could not signal service process with PID: %s", pid)
+        cli_print.warning("Could not signal service process with PID: {pid}".format(pid=pid))
         return False
     except Exception as e:
-        log.error("Unexpected error checking service status: %s", e)
+        cli_print.error("Unexpected error checking service status: {e}".format(e=e))
         return False
 
 
@@ -201,46 +199,42 @@ def check_service_status() -> ServerConfig | None:
     "If the service is up, return the port. If not, return None"
 
     # we check if we can pull everything from the lockfile first, its faster.
-    if lockfile_obj := core.read_lockfile():
-        log.debug("Found %s", lockfile_obj)
+    if lockfile_obj := core.read_lockfile(LOCK_FILE):
+        cli_print.debug("Found {lockfile_obj}".format(lockfile_obj=lockfile_obj))
         lockfile_address, lockfile_port = lockfile_obj.address.split(":")
 
         if proc := get_process_by_pid(lockfile_obj.pid):
             # if we find a process with this PID, we can't immediately trust it,
             # we gotta make sure the PID was not recycled
 
-            log.debug("Found process with PID: %s", lockfile_obj.pid)
+            cli_print.debug("Found process with PID: {lockfile_obj}".format(lockfile_obj=lockfile_obj.pid))
 
             # 1st check: do the address/port match the ones in the lockfile
             if server_config := get_process_httpconfig(proc):
                 # server_address, server_port = server_config.address.split(":")
 
-                log.debug("Found %s", server_config)
+                cli_print.debug("Found {server_config}".format(server_config=server_config))
                 if server_config.port == int(lockfile_port):
                     # If we look up the PID from the lockfile and the port on that process
                     # matches the port in the lockfile, it's definitely the right process.
-                    log.debug("Process port matches lockfile, must be the right process")
+                    cli_print.debug("Process port matches lockfile, must be the right process")
                     server_config.request_header = lockfile_obj.header
                     return server_config
                 else:
-                    log.warning(
-                        "Process port (%s) does not match lockfile port (%s)",
-                        server_config.port,
-                        lockfile_port,
+                    cli_print.warning(
+                        "Process port ({process_port}) does not match lockfile port ({lockfile_port})".format(process_port=server_config.port, lockfile_port=lockfile_port)
                     )
                     return auto_find_server_config(lockfile_obj)
             else:
-                log.warning("Could not get process port. Trying next check...")
+                cli_print.warning("Could not get process port. Trying next check...")
 
             # 2nd check: does the process name match the app name
             if proc_ident := get_process_identifier(proc):  #      we got the name/cmdline
-                log.debug(
-                    "Found process at PID %s with identifier %s",
-                    lockfile_obj.pid,
-                    proc_ident,
+                cli_print.debug(
+                    "Found process at PID {lockfile_pid} with identifier {proc_ident}".format(lockfile_pid=lockfile_obj.pid, proc_ident=proc_ident)
                 )
                 if SERVICENAME in proc_ident:
-                    log.debug("Name matches, checking signal")
+                    cli_print.debug("Name matches, checking signal")
                     # only return the lockfile port if we can confirm the process is alive
                     # via signal. If the signal fails, the PID is gone and the lockfile is stale.
                     if send_os_signal(lockfile_obj.pid):
@@ -250,19 +244,15 @@ def check_service_status() -> ServerConfig | None:
                             request_header=lockfile_obj.header,
                         )
                     else:
-                        log.warning(
-                            "Found process with identifer %s and PID %s, "
-                            "but could not signal it",
-                            proc_ident,
-                            lockfile_obj.pid,
+                        cli_print.warning(
+                            "Found process with identifer {proc_ident} and PID {lockfile_pid}, "
+                            "but could not signal it".format(proc_ident=proc_ident, lockfile_pid=lockfile_obj.pid)
                         )
                         return auto_find_server_config(lockfile_obj)
                 else:
-                    log.warning(
-                        "Found process with PID %s, but its name (%s) does not match. "
-                        "This means the lock file is stale and the PID was recycled.",
-                        lockfile_obj.pid,
-                        proc_ident,
+                    cli_print.warning(
+                        "Found process with PID {lockfile_pid}, but its name ({proc_ident}) does not match. "
+                        "This means the lock file is stale and the PID was recycled.".format(lockfile_pid=lockfile_obj.pid, proc_ident=proc_ident)
                     )
                     return auto_find_server_config(lockfile_obj, lock_file_bad=True)
             else:
@@ -271,8 +261,8 @@ def check_service_status() -> ServerConfig | None:
                 # permissions. This is tricky cause if the above steps didn't work,
                 # there's a good chance the auto-finder will fail too. So its best
                 # to just return what the lockfile says and let the request fail.
-                log.info(
-                    "Process identifier is not available for PID: %s", lockfile_obj.pid
+                cli_print.info(
+                    "Process identifier is not available for PID: {lockfile_pid}".format(lockfile_pid=lockfile_obj.pid)
                 )
                 return ServerConfig(
                     address=lockfile_address,
@@ -281,7 +271,7 @@ def check_service_status() -> ServerConfig | None:
                 )
         else:
             # no service process found with this PID. Lock file must be stale
-            log.warning("Lock file is stale: PID %s not found", lockfile_obj.pid)
+            cli_print.warning("Lock file is stale: PID {lockfile_pid} not found".format(lockfile_pid=lockfile_obj.pid))
             return auto_find_server_config(lockfile_obj, lock_file_bad=True)
     else:
         # if the lockfile doesn't exist or is malformed, use the auto-finder
@@ -293,5 +283,5 @@ def get_request_helper() -> RequestHelper | None:
 
     if server_config := check_service_status():
         helper = RequestHelper(server_config)
-        log.debug("Initialized %s", helper)
+        cli_print.debug("Initialized {helper}".format(helper=helper))
         return helper

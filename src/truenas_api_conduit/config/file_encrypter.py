@@ -20,16 +20,16 @@ from pydantic import SecretStr
 
 # project
 from truenas_api_conduit.errors import ConduitError
-from truenas_api_conduit.core import (
+from truenas_api_conduit.constants import (
     STORAGE_DIR,
     CONFIG_DIR,
     CRYPT_KEY_PATH,
     CRYPT_FILE_NAME,
     SLASH,
     ENV,
+    COLORS,
 )
 from truenas_api_conduit.console import console_stderr
-from truenas_api_conduit import COLORS
 
 SECRETS_DIR: Final[Path] = STORAGE_DIR / "secrets"
 SALT_LENGTH: Final[int] = 16

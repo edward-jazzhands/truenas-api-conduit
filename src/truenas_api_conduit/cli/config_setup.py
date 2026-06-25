@@ -1,6 +1,5 @@
 # standard library
 import sys
-import logging
 import tomllib
 from typing import Any, TYPE_CHECKING
 
@@ -13,19 +12,15 @@ if TYPE_CHECKING:
 import rich_click as click
 
 # project
-from truenas_api_conduit import COLORS
+from truenas_api_conduit.constants import COLORS, ENV, CONFIG_PATH
+from truenas_api_conduit.core import ensure_app_dirs
+from truenas_api_conduit.console import console_stderr
 from truenas_api_conduit.cli.cli_helpers import (
     CLIOptions,
     make_usage_error_panel,
     require_tty,
+    cli_print
 )
-
-# import truenas_api_conduit.core as core
-from truenas_api_conduit.core import CONFIG_PATH, ENV, ensure_config, ensure_storage_dir
-
-from truenas_api_conduit.console import console_stderr
-
-log = logging.getLogger(__name__)
 
 __all__ = [
     "config_setup",
@@ -33,10 +28,12 @@ __all__ = [
 
 
 def shared_config_setup(cli_options: CLIOptions) -> None:
+    """Ensures all the users config/storage dirs and files are created
+    if they don't exist"""
 
     if not CONFIG_PATH.exists():
         if not cli_options.api_key or not cli_options.truenas_address:
-            log.warning(
+            cli_print.warning(
                 "The config file has not been created yet, it's probably "
                 "your first time starting the service. If your server address "
                 "and API key are not set yet through other means, the service "
@@ -46,8 +43,7 @@ def shared_config_setup(cli_options: CLIOptions) -> None:
 
     # NOTE: Remember that the config file/dir must be ensured before trying to
     # import the user_config module:
-    ensure_config()  # Raises if failure
-    ensure_storage_dir()
+    ensure_app_dirs()  # Raises if failure
 
 
 def get_config_args_dict(
@@ -66,10 +62,10 @@ def get_config_args_dict(
     }
 
     if cli_options.start_locked:
-        log.info("Starting in locked mode")
+        cli_print.info("Starting in locked mode")
 
         args_dict = {k: v for k, v in to_filter.items() if v is not None}
-        log.debug("Config args: %s", args_dict)
+        cli_print.debug("Config args: {args_dict}".format(args_dict=args_dict))
         return args_dict
 
     else:
@@ -78,7 +74,7 @@ def get_config_args_dict(
 
         # only used by the start command
         if cli_options.api_key:
-            log.debug("Prompting for API key")
+            cli_print.debug("Prompting for API key")
             require_tty("API key")
             api_key = click.prompt("Enter your TrueNAS API key", hide_input=True)
         else:
@@ -92,15 +88,15 @@ def get_config_args_dict(
         if unmask is False:
             api_key = "*" * 10
 
-        to_add_to_filter: dict[str, Any] = {
+        add_to_filter: dict[str, Any] = {
             "truenas_address": cli_options.truenas_address,
             "validate_certs": cli_options.validate_certs,
             "api_key": api_key,
             "crypt_key": cli_options.crypt_key,
         }
-        to_filter.update(to_add_to_filter)
+        to_filter.update(add_to_filter)
         args_dict = {k: v for k, v in to_filter.items() if v is not None}
-        log.debug("Config args: %s", args_dict)
+        cli_print.debug("Config args: {args_dict}".format(args_dict=args_dict))
         return args_dict
 
 
@@ -127,11 +123,11 @@ def config_setup(cli_options: CLIOptions, unmask: bool | None = None) -> Config:
     try:
         cfg = Config(**args_dict)
     except Exception as e:
-        handle_config_error(e)
+        handle_config_error(e, cli_options.verbose)
         sys.exit(1)  # this line will never be reached, but typechecker doesn't know that
 
-    log.info("Config loaded successfully")
-    log.info(pretty_print_config(cfg))
+    cli_print.info("Config loaded successfully")
+    cli_print.info(pretty_print_config(cfg))
     return cfg
 
 
@@ -146,15 +142,15 @@ def config_setup_locked(cli_options: CLIOptions) -> AppBaseConfig:
     try:
         cfg = AppBaseConfig(**args_dict)
     except Exception as e:
-        handle_config_error(e)
+        handle_config_error(e, cli_options.verbose)
         sys.exit(1)  # this line will never be reached, but typechecker doesn't know that
 
-    log.info("AppBaseConfig loaded successfully")
-    log.info(pretty_print_config(cfg))
+    cli_print.info("AppBaseConfig loaded successfully")
+    cli_print.info(pretty_print_config(cfg))
     return cfg
 
 
-def handle_config_error(e: Exception) -> None:
+def handle_config_error(e: Exception, verbosity: int) -> None:
 
     from truenas_api_conduit.config.file_encrypter import (
         PasswordGetError,
@@ -162,35 +158,40 @@ def handle_config_error(e: Exception) -> None:
     )
     from pydantic import ValidationError
 
-    log_level: int = logging.getLogger().level
-    log_mapping = logging.getLevelNamesMapping()
 
     if isinstance(e, ValidationError):
-        _pydantic_error_panel(e)
-        sys.exit(1)
+        if verbosity >= 3:
+            raise
+        else:
+            _pydantic_error_panel(e)
+            sys.exit(1)
     if isinstance(e, tomllib.TOMLDecodeError):
-        _toml_decoding_error_panel(e)
-        sys.exit(1)
+        if verbosity >= 3:
+            raise
+        else:
+            _toml_decoding_error_panel(e)
+            sys.exit(1)
     if isinstance(e, PasswordGetError):
         # This is my custom error class so it will only happen if keyring tried
         # to use my fallback FileEncrypter backend, and the user password was
         # incorrect. Or a bug happened.
-        err_string: str | None = None
-        if e.err_code == GetErrorEnum.INCORRECT_ENCRYPTION_KEY:
-            err_string = "The encryption key you have entered is incorrect."
-            console_stderr.print(make_usage_error_panel(err_string, "Keyring Error"))
-            sys.exit(1)
+        if verbosity >= 3:
+            raise
         else:
-            if log_level <= log_mapping["TRACE"]:
-                raise
+            err_string: str | None = None
+            if e.err_code == GetErrorEnum.INCORRECT_ENCRYPTION_KEY:
+                err_string = "The encryption key you have entered is incorrect."
+                console_stderr.print(make_usage_error_panel(err_string, "Keyring Error"))
+                sys.exit(1)
             else:
-                log.error(
-                    "Unexpected error: %s | Raise the verbosity to see more information"
+                cli_print.error(
+                    "Unexpected error: {e} | Raise the verbosity "
+                    "to see more information".format(e=e)
                 )
                 sys.exit(1)
     if isinstance(e, Exception):
 
-        if log_level <= log_mapping["TRACE"]:
+        if verbosity >= 3:
             raise
         else:
             err_string = (
@@ -230,15 +231,23 @@ def _pydantic_error_panel(e: ValidationError) -> None:
     errs = e.errors()
     err_string = "[default]The following errors were found in your configuration:"
     for err in errs:
-        field_name = err["loc"][0]
-        if isinstance(field_name, str):
-            field_name = field_name.lower()
-        fields_with_errors.append(field_name)
-        err_string += f"\n    [yellow]{field_name}[default] is {err['type']}:  "
-        err_string += f"[bright_red]{err['msg']}"
+        if loc := err.get("loc"):
+            field_name = loc[0]
+            if isinstance(field_name, str):
+                field_name = field_name.lower()
+            fields_with_errors.append(field_name)
+            err_string += f"\n    [yellow]{field_name}[default] is {err.get("type")}:  "
+        if msg := err.get("msg"):
+            err_string += f"[bright_red] {msg}"
+        else:
+            err_string += f"[bright_red] {errs}"
     for field_name in fields_with_errors:
         if field_name in field_help_dict:
             err_string += field_help_dict[field_name]
+    if e.__context__:
+        err_string += f"\n  Occurred while handling: {e.__context__}"
+    if e.__cause__:
+        err_string += f"\n  Caused by: {e.__cause__}"
     err_string += (
         f"\n\n[default]You can use the [{COLORS.command}]config[default] "
         f"and [{COLORS.command}]config -p[default] commands to edit/find your "

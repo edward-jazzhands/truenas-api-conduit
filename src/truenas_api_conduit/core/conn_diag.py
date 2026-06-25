@@ -7,7 +7,7 @@ from functools import partial
 import logging
 from typing import Callable, AsyncGenerator
 
-from truenas_api_conduit.core import PLATFORM, Platform
+from truenas_api_conduit.constants import PLATFORM, Platform
 from truenas_api_conduit.config import Config
 
 log = logging.getLogger(__name__)

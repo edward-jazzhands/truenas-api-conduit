@@ -23,8 +23,8 @@ dependencies = [
 ]
 
 [project.scripts]
-truenas-api-conduit  = "truenas_api_conduit.cli.__main__:cli"
-truenas-api          = "truenas_api_conduit.cli.__main__:cli"
+truenas-api-conduit  = "truenas_api_conduit.cli.__main__:entrypoint"
+truenas-api          = "truenas_api_conduit.cli.__main__:entrypoint"
 truenas-api-conduitd = "truenas_api_conduit.core.__main__:start"
 
 [build-system]
@@ -38,6 +38,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "babel>=2.18.0",
     "basedpyright>=1.39.3",
     "black>=26.3.1",
     "mypy>=1.20.2",

@@ -15,12 +15,16 @@
 [?] Integrate systemd-python for better service integration in the service
 [ ] Write unit tests for everything
 [?] Add support for docker Secrets  *need to test*
-[ ] Separate out all the main menu help text into a separate file
+[X] Separate out all the main menu help text into a separate file
 [X] Finish process of moving the settings.toml file to exterior assets
 [ ] Locking feature should only work if the password was set using the set-key command (through keyring)
+[ ] Add option to force the set-key command to use the file encrypter backend
 [ ] Add a log level setter command
-[ ] Change the -v/--verbose option to only affect the CLI and not the service, likewise make the log level not affect the CLI
-[ ] Add a theme setter command
+[X] Move CLI error handling to a top level error handler with custom exceptions
+[X] Convert CLI to use console_stderr directly instead of logging and remove all logging calls from CLI
+[X] Change the -v/--verbose option to only affect the CLI and not the service, likewise make the log level not affect the CLI
+[ ] Add the i18n function to all print and logging statements, update all to use lazy/deferred keyword string formatting
+[?] Add a theme setter command
 [ ] Get all commands working with docker version
 [X] Implement the "start locked" feature
 [X] Integrate start locked option into the CLI start command

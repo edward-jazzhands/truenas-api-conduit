@@ -79,7 +79,7 @@
 
 # Set the logging level for the service. Note this does not affect the
 # CLI. To increase verbosity on the CLI, use the --verbose/-v(vv) flag.
-# Options: [critical, error, warning, info, debug, trace]
+# Options: [error, warning, info, debug, trace]
 #     Default: "warning"
 #     Equivalent Environment Var: TRUENAS_LOG_LEVEL
 

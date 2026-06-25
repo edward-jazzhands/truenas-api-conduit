@@ -5,6 +5,7 @@ from rich.console import Console
 # saves a tiny bit of startup time. Normally Rich-Click and the logging
 # RichHandler would both create their own consoles.
 
+
 console_stderr = Console(stderr=True)
 console_stdout = Console(stderr=False)
 

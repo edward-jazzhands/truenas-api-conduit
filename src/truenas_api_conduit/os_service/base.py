@@ -1,10 +1,11 @@
 from typing import assert_never
 from abc import ABC, abstractmethod
 
-import truenas_api_conduit.core as core
+from truenas_api_conduit.constants import AppEnv, Platform
+from truenas_api_conduit.errors import ConduitError
 
 
-class ServiceError(Exception):
+class ServiceError(ConduitError):
     "Base class for service errors."
 
 
@@ -38,7 +39,7 @@ class BaseService(ABC):
         pass
 
     @abstractmethod
-    def detect_service(self) -> core.AppEnv:
+    def detect_service(self) -> AppEnv:
         # Needs to check if the service is currently running as an OS service or
         # if it's in standalone mode
         pass
@@ -48,21 +49,21 @@ class BaseService(ABC):
         pass
 
 
-def get_service_manager(platform: core.Platform) -> BaseService:
+def get_service_manager(platform: Platform) -> BaseService:
     """A single `get_service_manager()` factory function resolves the correct
     implementation at runtime based on a `Platform` enum determined by the core
     module when the program starts.
     """
     match platform:
-        case core.Platform.LINUX:
+        case Platform.LINUX:
             from truenas_api_conduit.os_service.linux import LinuxService
 
             return LinuxService()
-        case core.Platform.WINDOWS:
+        case Platform.WINDOWS:
             from truenas_api_conduit.os_service.windows import WindowsService
 
             return WindowsService()
-        case core.Platform.MACOS:
+        case Platform.MACOS:
             from truenas_api_conduit.os_service.macos import MacOSService
 
             return MacOSService()

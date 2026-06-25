@@ -1,11 +1,29 @@
-from .base import BaseService
-from typing import TYPE_CHECKING
+
+# standard library
+import shutil
+import subprocess
+import sys
+import os
+from pathlib import Path
+import logging
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     from truenas_api_conduit.config.user_config import Config
 
+# local
+from truenas_api_conduit.constants import (
+    APP_NAME,
+    SERVICENAME,
+    AppEnv,
+    XDG_CONFIG_HOME,
+    LOCK_FILE,
+)
 import truenas_api_conduit.core as core
+from truenas_api_conduit.i18n import _
+from truenas_api_conduit.cli.cli_helpers import cli_print
 from truenas_api_conduit.os_service.base import BaseService, ServiceError
+from truenas_api_conduit.console import console_stdout  # , console_stderr
 
 
 class WindowsService(BaseService):
@@ -28,11 +46,11 @@ class WindowsService(BaseService):
     def status(self, forward_stdout: bool = True, suppress_output: bool = False) -> int:
         return 0
 
-    def detect_service(self) -> core.AppEnv:
+    def detect_service(self) -> AppEnv:
         if True:
-            return core.AppEnv.OS_SERVICE
+            return AppEnv.OS_SERVICE
         else:
-            return core.AppEnv.STANDALONE
+            return AppEnv.STANDALONE
 
     def logs(self, follow: bool = False, limit: int = 100) -> str | None:
 

@@ -14,9 +14,9 @@ import websockets.client as client
 import websockets.exceptions as ws_exceptions
 
 # project
-from truenas_api_conduit import APP_NAME
+from truenas_api_conduit.constants import APP_NAME, ENV
 from truenas_api_conduit.app_globals import app_globals
-from truenas_api_conduit.core import examine_os_error, ENV
+from truenas_api_conduit.core import examine_error
 from truenas_api_conduit.errors import ConduitError
 from truenas_api_conduit.config import Config
 from truenas_api_conduit.core.conn_diag import ConnDiag, run_connection_diagnostic
@@ -432,7 +432,7 @@ class TrueNASClient:
                 delay = min(delay * 2, MAX_RECONNECT_WAIT)
 
         log.debug("Broke out the connection loop so we must be connected now")
-        assert self.is_connected.is_set()
+        assert self.is_connected.is_set(), "Connection loop should have set this"
         self._reconnecting = False
         return True
 
@@ -451,7 +451,7 @@ class TrueNASClient:
         # concurrently and this is basically instant if the connection is good.
         async for test_name, result in run_connection_diagnostic(self.config):
             results[test_name] = result
-            log.info("%s result: %s", test_name, result)
+            log.debug("%s result: %s", test_name, result)
         return ConnDiag(**results)
 
     # Used in _connect
@@ -575,7 +575,7 @@ class TrueNASClient:
             )
             await self._error_handler(err_str, e)
         except OSError as e:
-            err_string = examine_os_error(e)
+            err_string = examine_error(e)
             log.error(err_string)
             raise
         except json.JSONDecodeError as e:
@@ -593,7 +593,7 @@ class TrueNASClient:
             )
             await self._error_handler(err_str, e)
         else:
-            log.debug(self.conn_diag)
+            log.info(self.conn_diag)
             return
 
     # Used in _start

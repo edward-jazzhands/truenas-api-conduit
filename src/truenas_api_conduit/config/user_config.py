@@ -27,11 +27,10 @@ from pydantic_settings import (
 )
 
 # project
-from truenas_api_conduit import APP_NAME
-from truenas_api_conduit.log_setup import logging_manager
+from truenas_api_conduit.constants import APP_NAME, ENV, CONFIG_PATH
+# from truenas_api_conduit.log_setup import logging_manager
 from truenas_api_conduit.app_globals import app_globals
 from truenas_api_conduit.console import set_no_color
-from truenas_api_conduit.core import CONFIG_PATH, ENV
 from truenas_api_conduit.config.keyring_source import (
     KeyringSettingsSource,
     KeyringField,
@@ -127,19 +126,30 @@ class AppBaseConfig(BaseSettings):
         file_secret_settings: SecretsSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
 
+        sources = [
+            TrackingInitSource(settings_cls, init_settings.init_kwargs),
+            TrackingEnvSource(settings_cls),
+            TrackingTomlSource(settings_cls),
+        ]
+
         # if the API key was passed in from the CLI then we skip the keyring
-        init_processed = init_settings()
-        skip = False
-        if init_processed.get("api_key"):
+        # init_processed = init_settings()
+        # skip = False
+        if init_settings.init_kwargs.get("api_key"):
             log.debug("Found API key in init kwargs. Skipping keyring")
-            skip = True
+            # skip = True
         else:
             # my custom fallback file encrypter keyring backend. This is set to
             # lowest priority (0.0) so that it should only be used if no other
             # keyring backends are available.
             from truenas_api_conduit.config.file_encrypter import FileEncrypter
 
-            keyring.set_keyring(FileEncrypter(init_processed.get("crypt_key")))
+            keyring.set_keyring(FileEncrypter(init_settings.init_kwargs.get("crypt_key")))
+            sources.append(
+                TrackingKeyringSource(settings_cls, service=APP_NAME),
+            )
+
+        sources.append(TrackingSecretsSource(settings_cls))
 
         # Priority follows the order of the tuple:
         # 1. CLI flags passed into constructor
@@ -148,13 +158,7 @@ class AppBaseConfig(BaseSettings):
         # 4. Keyring/Secrets Manager
         # 5. File secrets (mostly for Docker secrets but not exclusively)
         # 6. Config class defaults
-        return (
-            TrackingInitSource(settings_cls, init_settings.init_kwargs),
-            TrackingEnvSource(settings_cls),
-            TrackingTomlSource(settings_cls),
-            TrackingKeyringSource(settings_cls, service=APP_NAME, skip=skip),
-            TrackingSecretsSource(settings_cls),
-        )
+        return tuple(sources)
 
     # These fields are the ones needed to start up the aiohttp
     # server. This allows it to start up independently of putting in
@@ -239,8 +243,9 @@ class AppBaseConfig(BaseSettings):
 
     def model_post_init(self, _context: Any) -> None:
 
-        log_mapping = logging.getLevelNamesMapping()
-        logging_manager.set_log_level(log_mapping[self.log_level.upper()])
+        # log_mapping = logging.getLevelNamesMapping()
+        # logging_manager.set_log_level(log_mapping[self.log_level.upper()])
+
         log.info("Config post init: log_level set to %s", self.log_level)
 
         if self.no_color:
@@ -341,9 +346,9 @@ class Config(AppBaseConfig):
 
     def model_post_init(self, _context: Any) -> None:
 
-        log_mapping = logging.getLevelNamesMapping()
-        logging_manager.set_log_level(log_mapping[self.log_level.upper()])
-        log.info("Config post init: log_level set to %s", self.log_level)
+        # log_mapping = logging.getLevelNamesMapping()
+        # logging_manager.set_log_level(log_mapping[self.log_level.upper()])
+        # log.info("Config post init: log_level set to %s", self.log_level)
 
         if self.no_color:
             log.info("Config post init: Disabling color output")

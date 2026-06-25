@@ -4,32 +4,23 @@ import os
 import sys
 import logging
 import asyncio
-from enum import Enum
-from functools import partial
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final
 
 if TYPE_CHECKING:
     # ws_client contains the import for the websockets library so we gain
     # a little bit by making it a lazy import when its needed.
     from truenas_api_conduit.core.ws_client import TrueNASClient
-    from truenas_api_conduit.core.__main__ import Unlocker
+    from truenas_api_conduit.core.unlocker import Unlocker
     from truenas_api_conduit.config import Config, AppBaseConfig
 
 # third party
 from aiohttp import web
 
 # project
-from truenas_api_conduit import APP_NAME, SERVICENAME
-from truenas_api_conduit.core import examine_os_error
+from truenas_api_conduit.constants import APP_NAME, SERVICENAME
+from truenas_api_conduit.core import examine_error
 
 log = logging.getLogger(__name__)
-
-
-class RequestHeader(Enum):
-    NONE = 0
-    MISSING = 1
-    INCORRECT = 2
-    CORRECT = 3
 
 
 STEALTH_RESPONSE: Final[web.Response] = web.Response(
@@ -119,7 +110,7 @@ async def request_handler(request: web.Request) -> web.Response:
     log.info("Request payload: %s", payload)
 
     client: TrueNASClient = request.app.get("truenas_client")
-    assert client is not None
+    assert client is not None, "Client object cannot be None"
     result = await client.call(payload)
     log.info("Request successful")
     log.debug("Response: %s,", result)
@@ -199,7 +190,7 @@ async def restart(request: web.Request) -> web.Response:
             # attempting to restart. Theoretically I could whip up a mechanism
             # for a hot restart, but I don't think that's necessary. Maybe
             # in the future.
-            err_string = examine_os_error(e)
+            err_string = examine_error(e)
             if log_level == "trace":
                 raise
             else:
@@ -211,7 +202,7 @@ async def restart(request: web.Request) -> web.Response:
         try:
             os.execv(daemon_path, [SERVICENAME])
         except OSError as e:
-            err_string = examine_os_error(e)
+            err_string = examine_error(e)
             if log_level == "trace":
                 raise
             else:

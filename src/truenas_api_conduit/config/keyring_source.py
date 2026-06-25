@@ -190,7 +190,8 @@ class KeyringSettingsSource(PydanticBaseSettingsSource):
 
         # type checkers already know this is a dict through type narrowing so
         # this is for our own sanity:
-        assert isinstance(field_info.json_schema_extra, dict)
+        if not isinstance(field_info.json_schema_extra, dict):
+            raise RuntimeError("FieldInfo.json_schema_extra must be a dict")
 
         # We also need to ensure the 'keyring' key exists and is set to True
         # (specifically True, and not merely truthy)

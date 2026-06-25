@@ -10,3 +10,8 @@ _ = t.gettext
 
 # for pluralization
 ngettext = t.ngettext
+
+pgettext = t.pgettext
+
+yes_key = pgettext("The single-character CLI keyboard shortcut for 'yes'", "y")
+no_key = pgettext("The single-character CLI keyboard shortcut for 'no'", "n")

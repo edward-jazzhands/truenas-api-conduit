@@ -8,21 +8,27 @@ import subprocess
 import sys
 import os
 from pathlib import Path
-import logging
 from typing import Final
 
 # local
-from truenas_api_conduit import APP_NAME, SERVICENAME
+from truenas_api_conduit.constants import (
+    APP_NAME,
+    SERVICENAME,
+    AppEnv,
+    XDG_CONFIG_HOME,
+    LOCK_FILE,
+)
 import truenas_api_conduit.core as core
+from truenas_api_conduit.i18n import _
+from truenas_api_conduit.cli.cli_helpers import cli_print
 from truenas_api_conduit.os_service.base import BaseService, ServiceError
 from truenas_api_conduit.console import console_stdout  # , console_stderr
 
-# NOTE: log messages are configured to go to stderr
-log = logging.getLogger(__name__)
+# * i18n: DONE
 
 UNIT_NAME: Final[str] = f"{APP_NAME}.service"
 
-SYSTEMD_USER_DIR: Final[Path] = core.XDG_CONFIG_HOME / "systemd" / "user"
+SYSTEMD_USER_DIR: Final[Path] = XDG_CONFIG_HOME / "systemd" / "user"
 UNIT_FILE = SYSTEMD_USER_DIR / UNIT_NAME
 
 __all__ = [
@@ -97,7 +103,7 @@ class LinuxService(BaseService):
             217: "The required system user account for this service does not exist.",
         }
 
-        log.info("Initialized %s", self)
+        cli_print.info(_("Initialized {self}").format(self=self))
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}(installed={self.installed})"
@@ -118,7 +124,7 @@ class LinuxService(BaseService):
         # are set (e.g. PAGER=less in the user's shell
         cmd: list[str] = ["systemctl", "--no-pager", "--user", *args]
 
-        log.debug("Full command: '%s'", " ".join(cmd))
+        cli_print.debug("Full command: '{cmd}'".format(cmd=" ".join(cmd)))
 
         # NOTE: passing os.environ: for --user mode, systemctl communicates
         # with the user's D-Bus session via DBUS_SESSION_BUS_ADDRESS (and
@@ -132,7 +138,9 @@ class LinuxService(BaseService):
         env: dict[str, str] = {**os.environ, "SYSTEMD_COLORS": "1" if color else "0"}
         result = subprocess.run(cmd, capture_output=True, text=True, env=env)
 
-        log.debug("%s command returned code: %s", " ".join(args), result.returncode)
+        cli_print.debug(
+            _("{cmd} command returned code: {code}").format(cmd=" ".join(args), code=result.returncode)
+        )
 
         if result.returncode != 0:
             # If required, raise an error
@@ -151,20 +159,22 @@ class LinuxService(BaseService):
             else:
                 if not suppress_output:
                     if show_error_warning:
-                        log.warning(
-                            "%s command failed: %s",
-                            " ".join(args),
-                            (result.stderr or result.stdout).strip(),
+                        cli_print.warning(
+                            _("{cmd} command failed: {output}").format(
+                                cmd=" ".join(args),
+                                output=(result.stderr or result.stdout).strip(),
+                            )
                         )
                     else:
-                        log.debug(
-                            "%s command failed (ignored): %s",
-                            " ".join(args),
-                            (result.stderr or result.stdout).strip(),
+                        cli_print.debug(
+                            _("{cmd} command failed (ignored): {output}").format(
+                                cmd=" ".join(args),
+                                output=(result.stderr or result.stdout).strip(),
+                            )
                         )
         else:
             if not suppress_output:
-                log.debug(result.stdout + result.stderr)
+                cli_print.debug(result.stdout + result.stderr)
 
         return result
 
@@ -191,8 +201,10 @@ class LinuxService(BaseService):
         try:
             SYSTEMD_USER_DIR.mkdir(parents=True, exist_ok=True)
         except OSError as e:
-            err_string = core.examine_os_error(e)
-            log.error("Failed to create systemd unit directory: %s", err_string)
+            err_string = core.examine_error(e)
+            cli_print.error(
+                _("Failed to create systemd unit directory: {err}").format(err=err_string)
+            )
             raise
         console_stdout.print("Created systemd unit directory: %s", SYSTEMD_USER_DIR)
 
@@ -203,8 +215,10 @@ class LinuxService(BaseService):
         try:
             self.unit_path.write_text(unit_content, encoding="utf-8")
         except OSError as e:
-            err_string = core.examine_os_error(e)
-            log.error("Failed to write systemd unit file: %s", err_string)
+            err_string = core.examine_error(e)
+            cli_print.error(
+                _("Failed to write systemd unit file: {err}").format(err=err_string)
+            )
             raise
         console_stdout.print("Unit file written to: %s", self.unit_path)
 
@@ -231,12 +245,13 @@ class LinuxService(BaseService):
         result1 = self._systemctl("stop", UNIT_NAME, show_error_warning=False)
         if result1.returncode == 3:
             # this means the service is already stopped, so we can ignore the error
-            log.debug("Service already stopped, ignoring error")
+            cli_print.debug("Service already stopped, ignoring error")
         elif result1.returncode != 0:
-            log.warning(
-                "Failed to stop the service (exit code %s): %s",
-                result1.returncode,
-                (result1.stderr or result1.stdout).strip(),
+            cli_print.warning(
+                _("Failed to stop the service (exit code {code}): {output}").format(
+                    code=result1.returncode,
+                    output=(result1.stderr or result1.stdout).strip(),
+                )
             )
             # It should be possible to ignore this error and just plough through
 
@@ -250,10 +265,14 @@ class LinuxService(BaseService):
         if self.unit_path and self.unit_path.exists():
             try:
                 self.unit_path.unlink(missing_ok=True)
-                log.info("Unit file removed: %s", self.unit_path)
+                cli_print.info(
+                    _("Unit file removed: {path}").format(path=self.unit_path)
+                )
             except OSError as e:
-                err_string = core.examine_os_error(e)
-                log.error("Failed to remove unit file: %s", err_string)
+                err_string = core.examine_error(e)
+                cli_print.error(
+                    _("Failed to remove unit file: {err}").format(err=err_string)
+                )
                 raise
 
         self._systemctl("daemon-reload", required=True)
@@ -334,7 +353,11 @@ class LinuxService(BaseService):
         # status exits 0 (active), 3 (inactive/dead), or other codes for errors.
         # Print stdout regardless; it contains the useful human-readable block.
         output = result.stdout or result.stderr
-        log.info("systemctl status code: %s (%s)", code, self.code_mapping[code])
+        cli_print.info(
+            _("systemctl status code: {code} ({mapping})").format(
+                code=code, mapping=self.code_mapping[code]
+            )
+        )
 
         if not suppress_output:
             if code == 0:
@@ -352,12 +375,14 @@ class LinuxService(BaseService):
                 console_stdout.print(output, end="")
             return result.returncode
         else:  # if there's no output then who tf knows what's goin on, but it ain't success.
-            log.error(
-                "systemctl status produced no output (exit code %s)", result.returncode
+            cli_print.error(
+                _("systemctl status produced no output (exit code {code})").format(
+                    code=result.returncode
+                )
             )
             return 1
 
-    def detect_service(self) -> core.AppEnv:
+    def detect_service(self) -> AppEnv:
         # This exists to detect how the service is running/installed. It's used by
         # the CLI to determine how to send start/stop/reset commands to the service.
         # In standalone mode, this class will be bypassed entirely. Likewise with
@@ -372,8 +397,10 @@ class LinuxService(BaseService):
         # STANDALONE = "standalone"
         # DOCKER = "docker"
 
-        if lockfile_obj := core.read_lockfile():
-            log.debug("Found %s", lockfile_obj)
+        if lockfile_obj := core.read_lockfile(LOCK_FILE):
+            cli_print.debug(
+                _("Found {lockfile}").format(lockfile=lockfile_obj)
+            )
 
             pid_alive = False
             try:
@@ -384,30 +411,33 @@ class LinuxService(BaseService):
             except PermissionError:
                 pid_alive = True  # process exists, we just can't signal it
             except Exception as e:
-                log.error("Unexpected error checking service status: %s", e)
+                cli_print.error(
+                    _("Unexpected error checking service status: {err}").format(err=e)
+                )
             else:
-                log.debug("PID check passed")
+                cli_print.debug("PID check passed")
 
             if pid_alive:
-                return core.AppEnv(lockfile_obj.app_env)
+                return AppEnv(lockfile_obj.app_env)
             else:
-                log.warning(
-                    "Lockfile references PID %s which is no longer running. "
-                    "Deleting stale lockfile.",
-                    lockfile_obj.pid,
+                cli_print.warning(
+                    _("Lockfile references PID {pid} which is no longer running. "
+                      "Deleting stale lockfile.").format(pid=lockfile_obj.pid)
                 )
-                if result := core.delete_lockfile():
-                    log.error("Failed to delete stale lockfile: %s", result)
+                if result := core.delete_lockfile(LOCK_FILE):
+                    cli_print.error(
+                        _("Failed to delete stale lockfile: {result}").format(result=result)
+                    )
 
         # If lockfile is absent or stale, fallback to checking the unit file
         if UNIT_FILE.exists():
-            return core.AppEnv.OS_SERVICE
+            return AppEnv.OS_SERVICE
 
         # If there's no lockfile and we can't find the unit file, we can
         # assume the service is not installed.
         # NOTE: The CLI will determine whether or not the service is actually
         # running with its own checks so that's irrelevant to this function.
-        return core.AppEnv.STANDALONE
+        return AppEnv.STANDALONE
 
     def logs(self, follow: bool = False, limit: int = 100) -> str | None:
 
@@ -420,13 +450,17 @@ class LinuxService(BaseService):
         if follow:
             cmd.append("-f")
 
-            log.debug("Full command: %s", " ".join(cmd))
+            cli_print.debug(
+                _("Full command: {cmd}").format(cmd=" ".join(cmd))
+            )
             os.execvp("journalctl", cmd)
 
         else:
             cmd.extend(["-n", f"{limit}"])
 
-            log.debug("Full command: %s", " ".join(cmd))
+            cli_print.debug(
+                _("Full command: {cmd}").format(cmd=" ".join(cmd))
+            )
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode == 0:
                 return result.stdout

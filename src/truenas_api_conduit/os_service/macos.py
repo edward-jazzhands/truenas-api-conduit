@@ -16,13 +16,20 @@ if TYPE_CHECKING:
     from truenas_api_conduit.config.user_config import Config
 
 # local
-from truenas_api_conduit import APP_NAME, SERVICENAME
+from truenas_api_conduit.constants import (
+    APP_NAME,
+    SERVICENAME,
+    AppEnv,
+    XDG_CONFIG_HOME,
+    LOCK_FILE,
+)
 import truenas_api_conduit.core as core
+from truenas_api_conduit.i18n import _
+from truenas_api_conduit.cli.cli_helpers import cli_print
 from truenas_api_conduit.os_service.base import BaseService, ServiceError
 from truenas_api_conduit.console import console_stdout  # , console_stderr
 
-# NOTE: log messages are configured to go to stderr
-log = logging.getLogger(__name__)
+# * i18n: 0%
 
 # UNIT_NAME: Final[str] = f"{APP_NAME}.service"
 # SYSTEMD_USER_DIR: Final[Path] = (
@@ -92,11 +99,11 @@ class MacOSService(BaseService):
     def status(self, forward_stdout: bool = True, suppress_output: bool = False) -> int:
         return 0
 
-    def detect_service(self) -> core.AppEnv:
+    def detect_service(self) -> AppEnv:
         if True:
-            return core.AppEnv.OS_SERVICE
+            return AppEnv.OS_SERVICE
         else:
-            return core.AppEnv.STANDALONE
+            return AppEnv.STANDALONE
 
     def logs(self, follow: bool = False, limit: int = 100) -> str | None:
 
